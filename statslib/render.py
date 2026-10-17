@@ -1,11 +1,11 @@
-"""Drawing for the fleet dashboard, as plain data so it can be tested.
+"""Drawing for the machine stats dashboard, as plain data so it can be tested.
 
 A card is a list of lines; a line is a list of ``(text, style)`` parts
 whose texts add up to the card's width exactly. Style names are mapped to
-terminal colours by the curses front end (``bin/fleet``).
+terminal colours by the curses front end (``bin/machine-stats``).
 """
 
-from fleetlib.collect import row_level
+from statslib.collect import row_level
 
 CARD_HEIGHT = 6
 MIN_CARD = 40  # narrower cards leave the gauges too short to read

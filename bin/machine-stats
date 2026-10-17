@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Live stats for this machine and every machine Herdr has saved.
 
-fleet [--interval SECONDS] [--once]
+machine-stats [--interval SECONDS] [--once]
 
 One card per machine: CPU, memory and disk gauges, a CPU history
 sparkline, load, and Herdr agents by status. Keys: arrows or h/j/k/l move
@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fleetlib import collect as fleet, herdr, render  # noqa: E402
+from statslib import collect, herdr, render  # noqa: E402
 
 ENTER_KEYS = (10, 13, curses.KEY_ENTER)
 # Style name -> (256-colour foreground, 8-colour fallback, extra attribute).
@@ -40,9 +40,9 @@ PALETTE = {
 def load_machines():
     """Saved machines and a note, or no machines and why."""
     try:
-        return fleet.parse_machines(herdr.machine_list_text()), None
+        return collect.parse_machines(herdr.machine_list_text()), None
     except herdr.HerdrError as exc:
-        return [], f"fleet: herdr machine list failed: {exc}"
+        return [], f"machine-stats: herdr machine list failed: {exc}"
 
 
 class Poller:
@@ -59,7 +59,7 @@ class Poller:
     def loop(self):
         while True:
             found, note = load_machines()
-            rows = fleet.poll(socket.gethostname(), found)
+            rows = collect.poll(socket.gethostname(), found)
             with self.lock:
                 self.history.record(rows)
                 self.rows = rows
@@ -119,7 +119,8 @@ def draw(screen, styles, interval, poller, view, selected):
     height, width = screen.getmaxyx()
     screen.erase()
     status = render.summary(rows) if rows else "polling..."
-    title = f" fleet  {updated or '--:--:--'}  {status}  every {interval:g}s"
+    title = (f" machine stats  {updated or '--:--:--'}  {status}"
+             f"  every {interval:g}s")
     put(screen, 0, 0, title.ljust(width), styles["bar"])
     keys = " arrows move  Enter btop  r refresh  q quit"
     if note:
@@ -169,14 +170,15 @@ def dashboard(screen, interval):
         elif key in ENTER_KEYS and rows and rows[selected].snapshot:
             curses.def_prog_mode()
             curses.endwin()
-            subprocess.run(fleet.drill_argv(targets[selected]))
+            subprocess.run(collect.drill_argv(targets[selected]))
             curses.reset_prog_mode()
             screen.clear()
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        prog="fleet", description="Live stats for every Herdr machine.")
+        prog="machine-stats",
+        description="Live stats for every Herdr machine.")
     parser.add_argument("--interval", type=float, default=10,
                         help="seconds between polls (default 10)")
     parser.add_argument("--once", action="store_true",
@@ -188,8 +190,8 @@ def main(argv=None):
         found, note = load_machines()
         if note:
             print(note, file=sys.stderr)
-        for line in fleet.format_table(
-                fleet.poll(socket.gethostname(), found)):
+        for line in collect.format_table(
+                collect.poll(socket.gethostname(), found)):
             print(line)
         return 0
     curses.wrapper(dashboard, args.interval)

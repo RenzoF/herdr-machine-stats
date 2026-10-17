@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-# The fleet plugin root, so tests import fleetlib as bin/fleet does.
+# The plugin root, so tests import statslib as bin/machine-stats does.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 

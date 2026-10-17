@@ -1,4 +1,4 @@
-"""Fleet dashboard: one row of live stats per machine Herdr knows about.
+"""Machine stats: one row of live stats per machine Herdr knows about.
 
 Everything here is read-only. A machine is polled with one SSH call that
 prints a few facts about the host and the output of ``herdr agent list``;
@@ -10,7 +10,7 @@ import subprocess
 import threading
 from collections import namedtuple
 
-from fleetlib import herdr
+from statslib import herdr
 
 Machine = namedtuple("Machine", "label target enabled")
 Snapshot = namedtuple(

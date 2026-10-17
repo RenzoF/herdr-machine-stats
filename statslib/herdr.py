@@ -1,4 +1,7 @@
-"""The few Herdr reads fleet needs. Only this module names the herdr CLI."""
+"""The few Herdr reads machine-stats needs.
+
+Only this module names the herdr CLI.
+"""
 
 import json
 import os

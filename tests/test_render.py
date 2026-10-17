@@ -1,8 +1,8 @@
-"""fleetlib.render: bars, colour bands, sparklines and machine cards."""
+"""statslib.render: bars, colour bands, sparklines and machine cards."""
 
 import pytest
 
-from fleetlib import collect, render
+from statslib import collect, render
 
 
 def snap(**changes):
