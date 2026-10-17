@@ -9,6 +9,7 @@ import pty
 import select
 import stat
 import struct
+import subprocess
 import sys
 import termios
 import time
@@ -17,7 +18,7 @@ from pathlib import Path
 import pytest
 
 import statslib
-from statslib import collect
+from statslib import collect, deploy
 
 ROOT = Path(__file__).resolve().parent.parent
 COMMIT = "c0ffee" * 6 + "ab"
@@ -44,13 +45,12 @@ def fake_herdr(directory, plugin_list):
     return directory / "calls.log"
 
 
-@pytest.fixture
-def hosts(tmp_path):
-    """This machine runs a GitHub install; the remote has no plugin."""
+def build_hosts(tmp_path, source, root="/x"):
+    """This machine runs the plugin from ``source``; the remote has none."""
     here = {"result": {"plugins": [{
         "plugin_id": statslib.PLUGIN_ID,
-        "version": statslib.local_version(), "plugin_root": "/x",
-        "source": {"kind": "github", "resolved_commit": COMMIT}}]}}
+        "version": statslib.local_version(), "plugin_root": str(root),
+        "source": source}]}}
     local_log = fake_herdr(tmp_path / "local", here)
     remote_log = fake_herdr(tmp_path / "remote", {"result": {"plugins": []}})
     bin_dir = tmp_path / "bin"
@@ -67,6 +67,22 @@ def hosts(tmp_path):
                HERDR_BIN=str(tmp_path / "local" / "herdr"),
                PATH=f"{tmp_path / 'local'}:{bin_dir}:{os.environ['PATH']}")
     return env, local_log, remote_log
+
+
+@pytest.fixture
+def hosts(tmp_path):
+    """This machine runs a GitHub install; the remote has no plugin."""
+    return build_hosts(tmp_path, {"kind": "github", "resolved_commit": COMMIT})
+
+
+@pytest.fixture
+def dirty_hosts(tmp_path):
+    """This machine runs a checkout with uncommitted changes."""
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    (checkout / "edited.txt").write_text("not committed\n")
+    return build_hosts(tmp_path, {"kind": "local"}, checkout)
 
 
 class Screen:
@@ -152,6 +168,19 @@ def test_off_mode_says_how_to_turn_deploy_on(hosts):
     assert screen.quit() == 0
 
 
+def test_a_refusal_shows_on_the_card_and_installs_nothing(dirty_hosts):
+    env, _local, remote = dirty_hosts
+    screen = Screen(env, "--deploy", "ask")
+    assert screen.wait_for("plugin missing")
+    screen.press("l")
+    screen.press("d")
+    assert screen.wait_for("y/n")
+    screen.press("y")
+    assert screen.wait_for("plugin refused: this copy has uncommitted")
+    assert installs(remote) == []
+    assert screen.quit() == 0
+
+
 def test_auto_mode_deploys_once_without_a_key(hosts):
     env, _local, remote = hosts
     screen = Screen(env, "--deploy", "auto")
@@ -203,24 +232,53 @@ def test_ask_deploy_names_the_reason_not_to_deploy(mode, row, selected, want):
         assert want in reason
 
 
-def test_start_deploys_looks_the_commit_up_once_and_installs_each():
+def test_start_deploys_hands_each_machine_this_copys_entry():
     command, started = load_command(), []
 
     class Recorder:
-        def start(self, label, target, commit):
-            started.append((label, target, commit))
+        def start(self, label, target, entry):
+            started.append((label, target, entry))
     here = {"source": {"kind": "github", "resolved_commit": COMMIT}}
-    assert command.start_deploys(
-        Recorder(), here, [("a", "ta"), ("b", "tb")]) is None
-    assert started == [("a", "ta", COMMIT), ("b", "tb", COMMIT)]
+    command.start_deploys(Recorder(), here, [("a", "ta"), ("b", "tb")])
+    assert started == [("a", "ta", here), ("b", "tb", here)]
 
 
-def test_start_deploys_reports_a_refusal_and_installs_nothing():
-    command, started = load_command(), []
+def test_a_card_shows_deployed_until_the_next_poll_then_the_real_state():
+    command = load_command()
+    deployer = deploy.Deployer(run=lambda *a, **k: subprocess.CompletedProcess(
+        [], 0, "", ""), clock=lambda: 10.0)
+    deployer.start("MBP", "ta", {"source": {
+        "kind": "github", "resolved_commit": COMMIT}})
+    deployer.threads["MBP"].join(5)
+    row = remote_row({})  # the poll still sees no plugin
+    version = statslib.local_version()
+    assert command.notes_for(row, False, version, deployer, 9.0) == (
+        "plugin deployed", "green")
+    assert command.notes_for(row, False, version, deployer, 11.0) == (
+        "plugin missing", "yellow")
+    assert command.notes_for(
+        remote_row(github(version)), False, version, deployer, 11.0) == (
+        "plugin current", "green")
 
-    class Recorder:
-        def start(self, *args):
-            started.append(args)
-    message = command.start_deploys(Recorder(), None, [("a", "ta")])
-    assert message.startswith("deploy refused: ")
-    assert started == []
+
+class Halt(Exception):
+    """Ends Poller.loop after its first poll."""
+
+
+def test_the_poller_reports_when_its_latest_poll_began(monkeypatch):
+    command = load_command()
+    monkeypatch.setattr(command, "load_machines", lambda: ([], None))
+    monkeypatch.setattr(collect, "poll", lambda label, found: [])
+    # No background thread (it would linger, and the pty tests fork).
+    monkeypatch.setattr(command.threading, "Thread", lambda **kw: type(
+        "NoThread", (), {"start": lambda self: None})())
+    poller = command.Poller(60)
+    assert poller.view()[4] is None
+
+    def halt(timeout=None):
+        raise Halt
+    monkeypatch.setattr(poller.wake, "wait", halt)
+    before = time.monotonic()
+    with pytest.raises(Halt):
+        poller.loop()
+    assert before <= poller.view()[4] <= time.monotonic()

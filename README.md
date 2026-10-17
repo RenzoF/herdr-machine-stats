@@ -75,8 +75,15 @@ Each card ends with a plugin line:
   leaves it alone.
 - `plugin unknown`: the machine gave no usable plugin list (for example
   Herdr is not installed there), or its version is not a plain number.
-- `plugin deploying...`, `plugin deployed`, `plugin failed: <reason>`:
-  the latest deploy. Each install is given 120 seconds.
+- `plugin deploying...`: a deploy is running in the background. Each
+  install is given 120 seconds.
+- `plugin deployed`: the install finished. The next poll that starts
+  after it (up to one interval later) replaces this with the machine's
+  real state, usually `plugin current`.
+- `plugin failed: <reason>`: the install failed; the reason is the first
+  line of its error. It stays until the next deploy to that machine.
+- `plugin refused: <reason>`: nothing was sent, for one of the reasons
+  below. It stays until the next deploy to that machine.
 
 The command run on each machine, over non-interactive SSH, is:
 
@@ -85,12 +92,16 @@ herdr plugin install RenzoF/herdr-machine-stats --ref <commit> --yes
 ```
 
 `<commit>` is the commit this machine runs: the commit recorded by a
-GitHub install, or `HEAD` of a linked checkout. Deploy refuses, and says
-why in the footer, when this machine's copy is a linked checkout with
-uncommitted changes or a `HEAD` that is not on GitHub, because the other
-machines could not fetch it. It also refuses to touch a machine that
-runs a newer version or has a linked checkout. Deploy installs nothing
-else: no other plugin, file or setting is touched on the other machines.
+GitHub install, or `HEAD` of a linked checkout. For a linked checkout,
+looking the commit up includes a `git fetch`; like the install, it runs in
+the background, and it never prompts, so an SSH key must be usable without
+a passphrase prompt (loaded in `ssh-agent`, for example). Deploy refuses,
+and says why on the card (`plugin refused: <reason>`), when this machine's
+copy is a linked checkout with uncommitted changes or a `HEAD` that is not
+on GitHub, because the other machines could not fetch it. It never
+deploys to a machine that runs a newer version or has a linked checkout;
+in ask mode `d` says so in the footer. Deploy installs nothing else: no
+other plugin, file or setting is touched on the other machines.
 
 ## Requirements
 

@@ -2,6 +2,7 @@
 
 import subprocess
 import threading
+import time
 
 import pytest
 
@@ -106,6 +107,28 @@ def test_run_git_never_reads_the_terminal_or_prompts(monkeypatch):
     assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
 
 
+@pytest.mark.parametrize("configured, want", [
+    (None, "ssh -o BatchMode=yes"),
+    ("", "ssh -o BatchMode=yes"),
+    ("ssh -i /k/id", "ssh -i /k/id -o BatchMode=yes"),
+])
+def test_run_git_keeps_ssh_from_prompting_on_the_terminal(
+        monkeypatch, configured, want):
+    # git fetch over SSH runs ssh, which opens /dev/tty for passphrases.
+    if configured is None:
+        monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
+    else:
+        monkeypatch.setenv("GIT_SSH_COMMAND", configured)
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, "ok\n", "")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    deploy.run_git("/x", "fetch")
+    assert seen["env"]["GIT_SSH_COMMAND"] == want
+
+
 def test_install_argv_installs_the_pinned_commit_over_ssh():
     argv = deploy.install_argv("me@10.0.0.9", "abc123")
     assert argv[:5] == ["ssh", "-o", "BatchMode=yes", "-o",
@@ -136,13 +159,16 @@ def done(code=0, err=""):
     return subprocess.CompletedProcess([], code, "", err)
 
 
+GITHUB = entry(commit="abc")
+
+
 def test_deployer_reports_success_and_the_first_error_line():
     ok = deploy.Deployer(run=lambda *a, **k: done())
-    ok.start("a", "ta", "abc")
+    ok.start("a", "ta", GITHUB)
     ok.threads["a"].join(5)
     assert ok.get("a") == "deployed"
     bad = deploy.Deployer(run=lambda *a, **k: done(1, "no access\nmore"))
-    bad.start("a", "ta", "abc")
+    bad.start("a", "ta", GITHUB)
     bad.threads["a"].join(5)
     assert bad.get("a") == "failed: no access"
 
@@ -156,9 +182,9 @@ def test_deployer_runs_one_install_per_machine_at_a_time():
         release.wait(5)
         return done()
     deployer = deploy.Deployer(run=run)
-    assert deployer.start("a", "ta", "abc") is True
+    assert deployer.start("a", "ta", GITHUB) is True
     assert deployer.get("a") == "deploying..."
-    assert deployer.start("a", "ta", "abc") is False
+    assert deployer.start("a", "ta", GITHUB) is False
     release.set()
     deployer.threads["a"].join(5)
     assert len(seen) == 1 and seen[0] == deploy.install_argv("ta", "abc")
@@ -171,7 +197,7 @@ def test_deployer_installs_without_reading_the_terminal():
         seen.update(kwargs)
         return done()
     deployer = deploy.Deployer(run=run)
-    deployer.start("a", "ta", "abc")
+    deployer.start("a", "ta", GITHUB)
     deployer.threads["a"].join(5)
     assert seen["stdin"] is subprocess.DEVNULL
 
@@ -180,6 +206,122 @@ def test_deployer_reports_a_timeout():
     def run(argv, **kwargs):
         raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
     deployer = deploy.Deployer(run=run, timeout=7)
-    deployer.start("a", "ta", "abc")
+    deployer.start("a", "ta", GITHUB)
     deployer.threads["a"].join(5)
     assert deployer.get("a") == "failed: timeout"
+
+
+def test_deployer_looks_the_commit_up_in_the_background():
+    release = threading.Event()
+    asked = []
+    installed = []
+
+    def git(root, *args):
+        asked.append(args)
+        release.wait(5)
+        return {"status": "", "rev-parse": "feed01",
+                "branch": "origin/main"}.get(args[0], "")
+
+    def run(argv, **kwargs):
+        installed.append(argv)
+        return done()
+    deployer = deploy.Deployer(run=run, git=git)
+    linked_copy = entry(kind="local", root="/opt/p")
+    began = time.monotonic()
+    assert deployer.start("a", "ta", linked_copy) is True
+    assert time.monotonic() - began < 1  # start never waits for git
+    assert deployer.get("a") == "deploying..."
+    release.set()
+    deployer.threads["a"].join(5)
+    assert asked[0] == ("status", "--porcelain")
+    assert installed == [deploy.install_argv("ta", "feed01")]
+    assert deployer.get("a") == "deployed"
+
+
+@pytest.mark.parametrize("reason", [
+    "this copy has uncommitted changes", "feed01 is not on GitHub"])
+def test_deployer_shows_a_refusal_and_installs_nothing(reason):
+    def git(root, *args):
+        raise deploy.Refused(reason)
+    installed = []
+    deployer = deploy.Deployer(
+        run=lambda argv, **kw: installed.append(argv), git=git)
+    deployer.start("a", "ta", entry(kind="local"))
+    deployer.threads["a"].join(5)
+    assert deployer.get("a") == f"refused: {reason}"
+    assert installed == []
+
+
+def test_deployer_refuses_without_an_installed_copy_here():
+    deployer = deploy.Deployer(run=lambda *a, **k: done())
+    deployer.start("a", "ta", None)
+    deployer.threads["a"].join(5)
+    assert deployer.get("a").startswith("refused: this machine has no")
+
+
+def test_deployer_never_leaves_a_machine_deploying_after_a_surprise():
+    def git(root, *args):
+        raise RuntimeError("boom")
+    deployer = deploy.Deployer(run=lambda *a, **k: done(), git=git)
+    deployer.start("a", "ta", entry(kind="local"))
+    deployer.threads["a"].join(5)
+    assert deployer.get("a").startswith("failed: ")
+
+
+def finished(run, clock_time=10.0):
+    deployer = deploy.Deployer(run=run, clock=lambda: clock_time)
+    deployer.start("a", "ta", GITHUB)
+    deployer.threads["a"].join(5)
+    return deployer
+
+
+def test_deployed_gives_way_to_a_poll_that_began_after_it_finished():
+    deployer = finished(lambda *a, **k: done(), clock_time=10.0)
+    assert deployer.get("a") == "deployed"
+    assert deployer.get("a", polled=None) == "deployed"
+    assert deployer.get("a", polled=9.5) == "deployed"  # read before the end
+    assert deployer.get("a", polled=10.5) is None
+
+
+def no_access(argv, **kwargs):
+    return done(1, "no access")
+
+
+def times_out(argv, **kwargs):
+    raise subprocess.TimeoutExpired(argv, 1)
+
+
+@pytest.mark.parametrize("result, status", [
+    (no_access, "failed: no access"), (times_out, "failed: timeout")])
+def test_failures_stay_on_the_card_after_later_polls(result, status):
+    deployer = finished(result)
+    assert deployer.get("a", polled=99.0) == status
+
+
+def test_a_refusal_stays_on_the_card_after_later_polls():
+    def git(root, *args):
+        raise deploy.Refused("no")
+    deployer = deploy.Deployer(run=lambda *a, **k: done(), git=git)
+    deployer.start("a", "ta", entry(kind="local"))
+    deployer.threads["a"].join(5)
+    assert deployer.get("a", polled=time.monotonic() + 99) == "refused: no"
+
+
+def test_a_new_deploy_replaces_a_stale_deployed_result():
+    release = threading.Event()
+    results = [done(), done(1, "no access")]
+
+    def run(argv, **kwargs):
+        release.wait(5)
+        return results.pop(0)
+    deployer = deploy.Deployer(run=run, clock=lambda: 10.0)
+    release.set()
+    deployer.start("a", "ta", GITHUB)
+    deployer.threads["a"].join(5)
+    assert deployer.get("a", polled=11.0) is None
+    release.clear()
+    deployer.start("a", "ta", GITHUB)
+    assert deployer.get("a", polled=11.0) == "deploying..."
+    release.set()
+    deployer.threads["a"].join(5)
+    assert deployer.get("a", polled=11.0) == "failed: no access"

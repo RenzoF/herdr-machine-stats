@@ -163,6 +163,8 @@ def test_step_moves_the_selection_and_stays_on_a_card(selected, delta, want):
     ("missing", {}, "deploying...", ("plugin deploying...", "yellow")),
     ("missing", {}, "deployed", ("plugin deployed", "green")),
     ("missing", {}, "failed: timeout", ("plugin failed: timeout", "red")),
+    ("missing", {}, "refused: this copy has uncommitted changes",
+     ("plugin refused: this copy has uncommitted changes", "red")),
 ])
 def test_plugin_note_shows_state_or_the_latest_deploy(
         state, entry, status, want):

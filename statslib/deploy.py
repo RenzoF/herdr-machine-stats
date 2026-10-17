@@ -9,6 +9,7 @@ import os
 import shlex
 import subprocess
 import threading
+import time
 
 from statslib import REPO
 
@@ -54,6 +55,19 @@ def deployable(state, entry):
     return state in ("missing", "older") and not linked(entry)
 
 
+def git_env():
+    """The environment for git: nothing may prompt on the terminal.
+
+    ``GIT_TERMINAL_PROMPT`` stops git's own credential prompts. A fetch
+    over SSH runs ssh, which opens /dev/tty for a passphrase or an unknown
+    host, so ssh is told never to ask; a ``GIT_SSH_COMMAND`` already set is
+    kept and gains the option.
+    """
+    ssh = os.environ.get("GIT_SSH_COMMAND") or "ssh"
+    return dict(os.environ, GIT_TERMINAL_PROMPT="0",
+                GIT_SSH_COMMAND=f"{ssh} -o BatchMode=yes")
+
+
 def run_git(root, *args):
     """stdout of ``git -C root args``; a failure raises Refused.
 
@@ -63,8 +77,7 @@ def run_git(root, *args):
     try:
         done = subprocess.run(
             ["git", "-C", str(root), *args], capture_output=True, text=True,
-            timeout=60, stdin=subprocess.DEVNULL,
-            env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+            timeout=60, stdin=subprocess.DEVNULL, env=git_env())
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise Refused(f"git {args[0]} failed: {exc}") from exc
     if done.returncode:
@@ -122,29 +135,42 @@ def auto_targets(rows, targets, local_version, attempted):
 
 
 class Deployer:
-    """Installs in the background, at most one at a time per machine."""
+    """Deploys in the background, at most one at a time per machine.
 
-    def __init__(self, run=None, timeout=DEPLOY_TIMEOUT):
+    The whole job runs off the caller's thread: finding the commit (which
+    may fetch from GitHub) and then installing it.
+    """
+
+    def __init__(self, run=None, timeout=DEPLOY_TIMEOUT, git=run_git,
+                 clock=time.monotonic):
         self.run = run or subprocess.run
         self.timeout = timeout
+        self.git = git
+        self.clock = clock
         self.lock = threading.Lock()
         self.status = {}
+        self.finished = {}
         self.threads = {}
 
-    def start(self, label, target, commit):
-        """Begin installing on ``target``; False if one is running."""
+    def start(self, label, target, entry):
+        """Begin deploying to ``target``; False if one is running.
+
+        ``entry`` is this machine's own plugin entry, the source of the
+        commit to install.
+        """
         with self.lock:
             if self.status.get(label) == "deploying...":
                 return False
             self.status[label] = "deploying..."
         thread = threading.Thread(
-            target=self._install, args=(label, target, commit), daemon=True)
+            target=self._deploy, args=(label, target, entry), daemon=True)
         self.threads[label] = thread
         thread.start()
         return True
 
-    def _install(self, label, target, commit):
+    def _deploy(self, label, target, entry):
         try:
+            commit = source_commit(entry, self.git)
             done = self.run(install_argv(target, commit), capture_output=True,
                             text=True, timeout=self.timeout,
                             stdin=subprocess.DEVNULL)
@@ -154,13 +180,27 @@ class Deployer:
                     lines[0] if lines else f"exit {done.returncode}")
             else:
                 result = "deployed"
+        except Refused as exc:
+            result = f"refused: {exc}"
         except subprocess.TimeoutExpired:
             result = "failed: timeout"
-        except OSError as exc:
+        except Exception as exc:  # never leave a card deploying for good
             result = f"failed: {exc}"
         with self.lock:
             self.status[label] = result
+            self.finished[label] = self.clock()
 
-    def get(self, label):
+    def get(self, label, polled=None):
+        """The latest result for ``label``, or None.
+
+        ``polled`` is when the poll on screen began (``time.monotonic``).
+        A "deployed" result gives way once a poll that began after the
+        install ended is shown, because that poll reports the machine's
+        real state. Failures and refusals stay until the next deploy.
+        """
         with self.lock:
-            return self.status.get(label)
+            status = self.status.get(label)
+            if (status == "deployed" and polled is not None
+                    and self.finished[label] < polled):
+                return None
+            return status

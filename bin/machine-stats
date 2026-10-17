@@ -68,10 +68,12 @@ class Poller:
         self.wake = threading.Event()
         self.history = render.History()
         self.rows, self.targets, self.note, self.updated = None, [], None, ""
+        self.polled = None  # time.monotonic() when the latest poll began
         threading.Thread(target=self.loop, daemon=True).start()
 
     def loop(self):
         while True:
+            began = time.monotonic()
             found, note = load_machines()
             rows = collect.poll(socket.gethostname(), found)
             with self.lock:
@@ -80,12 +82,14 @@ class Poller:
                 self.targets = [None, *(m.target for m in found)]
                 self.note = note
                 self.updated = time.strftime("%H:%M:%S")
+                self.polled = began
             self.wake.wait(self.interval)
             self.wake.clear()
 
     def view(self):
         with self.lock:
-            return self.rows, self.targets, self.note, self.updated
+            return (self.rows, self.targets, self.note, self.updated,
+                    self.polled)
 
     def refresh(self):
         self.wake.set()
@@ -130,7 +134,7 @@ def put(screen, y, x, text, attr=0):
 
 def draw(screen, styles, interval, poller, view, selected, notes=None,
          message=None):
-    rows, _targets, note, updated = view
+    rows, _targets, note, updated, _polled = view
     height, width = screen.getmaxyx()
     screen.erase()
     status = render.summary(rows) if rows else "polling..."
@@ -178,10 +182,9 @@ def dashboard(screen, interval, mode, mode_note):
         here = rows[0].snapshot.plugin if rows and rows[0].snapshot else None
         picks = (deploy.auto_targets(rows, targets, version, attempted)
                  if mode == "auto" else [])
-        if picks:
-            attempted.update(label for label, _target in picks)
-            message = start_deploys(deployer, here, picks) or message
-        notes = [notes_for(row, i == 0, version, deployer)
+        attempted.update(label for label, _target in picks)
+        start_deploys(deployer, here, picks)
+        notes = [notes_for(row, i == 0, version, deployer, view[4])
                  for i, row in enumerate(rows)]
         if prompt:
             message = f"deploy {version} to {prompt[0]}? y/n"
@@ -192,7 +195,7 @@ def dashboard(screen, interval, mode, mode_note):
             label, target = prompt
             prompt, message = None, None
             if key == ord("y"):
-                message = start_deploys(deployer, here, [(label, target)])
+                start_deploys(deployer, here, [(label, target)])
             continue
         columns = render.grid(max(len(rows), 1), screen.getmaxyx()[1])[0]
         moves = {curses.KEY_RIGHT: 1, ord("l"): 1, curses.KEY_LEFT: -1,
@@ -216,14 +219,17 @@ def dashboard(screen, interval, mode, mode_note):
             screen.clear()
 
 
-def notes_for(row, is_here, version, deployer):
-    """The plugin line for one card; this machine is always current."""
+def notes_for(row, is_here, version, deployer, polled=None):
+    """The plugin line for one card; this machine is always current.
+
+    ``polled`` is when the poll behind ``row`` began.
+    """
     if row.snapshot is None:
         return None
     entry = row.snapshot.plugin
     state = "current" if is_here and entry else deploy.plugin_state(
         version, entry)
-    return render.plugin_note(state, entry, deployer.get(row.label))
+    return render.plugin_note(state, entry, deployer.get(row.label, polled))
 
 
 def ask_deploy(mode, rows, selected, version):
@@ -244,17 +250,13 @@ def ask_deploy(mode, rows, selected, version):
 
 
 def start_deploys(deployer, here, picks):
-    """Install the commit this machine runs on each (label, target).
+    """Deploy this machine's plugin ``here`` to each (label, target).
 
-    The commit is looked up once; None on success, else why not.
+    Everything slow, including the lookup of the commit, runs in the
+    deployer's threads; a refusal shows on the card.
     """
-    try:
-        commit = deploy.source_commit(here)
-    except deploy.Refused as exc:
-        return f"deploy refused: {exc}"
     for label, target in picks:
-        deployer.start(label, target, commit)
-    return None
+        deployer.start(label, target, here)
 
 
 def main(argv=None):

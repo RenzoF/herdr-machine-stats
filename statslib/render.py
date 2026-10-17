@@ -120,7 +120,7 @@ def _footer(snap, inner):
 def plugin_note(state, entry, status):
     """The card's plugin line: the latest deploy, else the state."""
     if status:
-        style = ("red" if status.startswith("failed")
+        style = ("red" if status.startswith(("failed", "refused"))
                  else "green" if status == "deployed" else "yellow")
         return f"plugin {status}", style
     if linked(entry):
