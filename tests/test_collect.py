@@ -508,3 +508,35 @@ def test_parse_snapshot_reads_the_plugin_entry_after_its_marker():
     assert snap.plugin["source"]["resolved_commit"] == "c0ffee"
     assert snap.agents == {"idle": 2, "blocked": 1, "working": 1}
     assert collect.parse_snapshot(SNAPSHOT).plugin is None
+
+
+def test_deploy_flag_overrides_the_setting_and_rejects_other_values(
+        capsys):
+    cmd = load_fleet_command()
+    assert cmd.deploy_mode("ask") == ("ask", None)
+    with pytest.raises(SystemExit):
+        cmd.main(["--once", "--deploy", "always"])
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_deploy_mode_is_off_when_herdr_cannot_name_the_config_dir():
+    cmd = load_fleet_command()  # HERDR_BIN points nowhere (conftest)
+    mode, note = cmd.deploy_mode(None)
+    assert mode == "off" and "config" in note
+
+
+def test_config_dir_is_the_path_herdr_prints(fake_herdr, monkeypatch):
+    shim, calls, canned = fake_herdr
+    (canned / "plugin-config-dir").write_text("/home/me/.config/p\n")
+    monkeypatch.setenv("HERDR_BIN", str(shim))
+    assert herdr.config_dir("x.y") == Path("/home/me/.config/p")
+    assert calls.read_text() == "plugin config-dir x.y\n"
+
+
+def test_config_dir_refuses_empty_output_instead_of_the_current_directory(
+        fake_herdr, monkeypatch):
+    shim, _calls, canned = fake_herdr
+    (canned / "plugin-config-dir").write_text("\n")
+    monkeypatch.setenv("HERDR_BIN", str(shim))
+    with pytest.raises(herdr.HerdrError, match="printed nothing"):
+        herdr.config_dir("x.y")

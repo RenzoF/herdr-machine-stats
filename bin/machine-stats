@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from statslib import collect, herdr, render  # noqa: E402
+from statslib import PLUGIN_ID, collect, config, herdr, render  # noqa: E402
 
 ENTER_KEYS = (10, 13, curses.KEY_ENTER)
 # Style name -> (256-colour foreground, 8-colour fallback, extra attribute).
@@ -43,6 +43,16 @@ def load_machines():
         return collect.parse_machines(herdr.machine_list_text()), None
     except herdr.HerdrError as exc:
         return [], f"machine-stats: herdr machine list failed: {exc}"
+
+
+def deploy_mode(override):
+    """The deploy mode for this run, and a note when it fell back to off."""
+    if override:
+        return override, None
+    try:
+        return config.load(herdr.config_dir(PLUGIN_ID))
+    except herdr.HerdrError as exc:
+        return "off", f"no plugin config dir ({exc}); deploy is off"
 
 
 class Poller:
@@ -183,6 +193,8 @@ def main(argv=None):
                         help="seconds between polls (default 10)")
     parser.add_argument("--once", action="store_true",
                         help="print the table once and exit")
+    parser.add_argument("--deploy", choices=config.MODES,
+                        help="deploy mode for this run (default: config)")
     args = parser.parse_args(argv)
     if args.interval < 1:
         parser.error("--interval must be at least 1 second")

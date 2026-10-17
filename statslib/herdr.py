@@ -47,7 +47,10 @@ def machine_list_text(timeout=10):
 
 def config_dir(plugin_id, timeout=10):
     """The Herdr config directory of ``plugin_id``."""
-    return Path(_local(["plugin", "config-dir", plugin_id], timeout).strip())
+    printed = _local(["plugin", "config-dir", plugin_id], timeout).strip()
+    if not printed:  # Path("") would be the current directory
+        raise HerdrError("herdr plugin config-dir printed nothing")
+    return Path(printed)
 
 
 # The agent list as a shell fragment, for scripts that run on other hosts.
