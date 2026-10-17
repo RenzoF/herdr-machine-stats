@@ -1,0 +1,21 @@
+id = "renzo.fleet"
+name = "fleet"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Live CPU, memory, disk and agent status for every machine Herdr knows, with btop drill-down"
+platforms = ["linux", "macos"]
+
+# Full-screen dashboard inside Herdr. Commands run from this directory.
+[[panes]]
+id = "dashboard"
+title = "fleet"
+placement = "zoomed"
+command = ["python3", "bin/fleet"]
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "open"
+title = "Open fleet"
+contexts = ["workspace"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "renzo.fleet", "--entrypoint", "dashboard", "--placement", "zoomed", "--focus"]
+platforms = ["linux", "macos"]

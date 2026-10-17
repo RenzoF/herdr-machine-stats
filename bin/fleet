@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""Live stats for this machine and every machine Herdr has saved.
+
+fleet [--interval SECONDS] [--once]
+
+One row per machine: load against cores, memory and disk use, and Herdr
+agents by status. Keys: up/down (or j/k) select, Enter opens btop on the
+selected machine, r refreshes now, q quits. --once prints the table and
+exits. Read-only: nothing is installed on, written to, or sent to the
+machines.
+"""
+import argparse
+import curses
+import socket
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from fleetlib import collect as fleet, herdr  # noqa: E402
+
+ENTER_KEYS = (10, 13, curses.KEY_ENTER)
+
+
+def load_machines():
+    """Saved machines and a note, or no machines and why."""
+    try:
+        return fleet.parse_machines(herdr.machine_list_text()), None
+    except herdr.HerdrError as exc:
+        return [], f"fleet: herdr machine list failed: {exc}"
+
+
+class Poller:
+    """Polls every machine in the background; the view never blocks."""
+
+    def __init__(self, interval):
+        self.interval = interval
+        self.lock = threading.Lock()
+        self.wake = threading.Event()
+        self.rows, self.targets, self.note, self.updated = None, [], None, ""
+        threading.Thread(target=self.loop, daemon=True).start()
+
+    def loop(self):
+        while True:
+            found, note = load_machines()
+            rows = fleet.poll(socket.gethostname(), found)
+            with self.lock:
+                self.rows = rows
+                self.targets = [None, *(m.target for m in found)]
+                self.note = note
+                self.updated = time.strftime("%H:%M:%S")
+            self.wake.wait(self.interval)
+            self.wake.clear()
+
+    def view(self):
+        with self.lock:
+            return self.rows, self.targets, self.note, self.updated
+
+    def refresh(self):
+        self.wake.set()
+
+
+def start_colors():
+    try:
+        curses.curs_set(0)
+    except curses.error:
+        pass
+    if not curses.has_colors():
+        return {}
+    curses.start_color()
+    try:
+        curses.use_default_colors()
+        background = -1
+    except curses.error:
+        background = curses.COLOR_BLACK
+    curses.init_pair(1, curses.COLOR_RED, background)
+    red = curses.color_pair(1)
+    return {"down": red, "alert": red, "dim": curses.A_DIM}
+
+
+def put(screen, y, text, attr=0):
+    height, width = screen.getmaxyx()
+    if y < height:
+        screen.addnstr(y, 0, text, max(width - 1, 0), attr)
+
+
+def draw(screen, styles, interval, view, selected):
+    rows, _targets, note, updated = view
+    screen.erase()
+    put(screen, 0, f"fleet  updated {updated or '-'}  every {interval:g}s"
+        "   up/down select  Enter btop  r refresh  q quit", curses.A_BOLD)
+    if rows is None:
+        put(screen, 2, "polling...")
+    else:
+        lines = fleet.format_table(rows)
+        put(screen, 2, lines[0], curses.A_BOLD)
+        for i, (row, line) in enumerate(zip(rows, lines[1:])):
+            attr = styles.get(fleet.row_level(row), 0)
+            if i == selected:
+                attr |= curses.A_REVERSE
+            put(screen, 3 + i, line, attr)
+    if note:
+        put(screen, 4 + len(rows or []), note)
+    screen.refresh()
+
+
+def dashboard(screen, interval):
+    styles = start_colors()
+    screen.timeout(250)
+    poller = Poller(interval)
+    selected = 0
+    while True:
+        view = poller.view()
+        rows, targets = view[0] or [], view[1]
+        selected = min(selected, max(len(rows) - 1, 0))
+        draw(screen, styles, interval, view, selected)
+        key = screen.getch()
+        if key in (ord("q"), 27):
+            return
+        if key == ord("r"):
+            poller.refresh()
+        elif key in (curses.KEY_DOWN, ord("j")):
+            selected = min(selected + 1, max(len(rows) - 1, 0))
+        elif key in (curses.KEY_UP, ord("k")):
+            selected = max(selected - 1, 0)
+        elif key in ENTER_KEYS and rows and rows[selected].snapshot:
+            curses.def_prog_mode()
+            curses.endwin()
+            subprocess.run(fleet.drill_argv(targets[selected]))
+            curses.reset_prog_mode()
+            screen.clear()
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="fleet", description="Live stats for every Herdr machine.")
+    parser.add_argument("--interval", type=float, default=10,
+                        help="seconds between polls (default 10)")
+    parser.add_argument("--once", action="store_true",
+                        help="print the table once and exit")
+    args = parser.parse_args(argv)
+    if args.interval < 1:
+        parser.error("--interval must be at least 1 second")
+    if args.once:
+        found, note = load_machines()
+        if note:
+            print(note, file=sys.stderr)
+        for line in fleet.format_table(
+                fleet.poll(socket.gethostname(), found)):
+            print(line)
+        return 0
+    curses.wrapper(dashboard, args.interval)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
