@@ -140,8 +140,9 @@ def run_host(target, script, timeout=15):
         argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
                 target, "sh -c " + shlex.quote(script)]
     try:
-        done = subprocess.run(
-            argv, capture_output=True, text=True, timeout=timeout)
+        # stdin is closed: the dashboard reads its keys from the terminal.
+        done = subprocess.run(argv, capture_output=True, text=True,
+                              timeout=timeout, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired as exc:
         raise HostError("timeout") from exc
     except OSError as exc:

@@ -262,6 +262,17 @@ def test_run_host_gives_up_on_a_hung_host(tmp_path, monkeypatch):
         collect.run_host("me@10.0.0.9", "true", timeout=0.3)
 
 
+def test_run_host_never_reads_the_terminal(monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, "ok", "")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert collect.run_host("me@10.0.0.9", "true") == "ok"
+    assert seen["stdin"] is subprocess.DEVNULL
+
+
 def snap(**changes):
     base = dict(os="Linux", ncpu=12, load=7.63, cpu_pct=46, mem_pct=75,
                 mem_used_kb=18000000, mem_total_kb=24000000, disk_pct=64,

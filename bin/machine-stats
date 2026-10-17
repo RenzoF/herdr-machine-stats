@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Live stats for this machine and every machine Herdr has saved.
 
-machine-stats [--interval SECONDS] [--once]
+machine-stats [--interval SECONDS] [--once] [--deploy MODE]
 
 One card per machine: CPU, memory and disk gauges, a CPU history
-sparkline, load, and Herdr agents by status. Keys: arrows or h/j/k/l move
-between cards, Enter opens btop on the selected machine, r refreshes now,
-q quits. --once prints a plain table and exits. Read-only: nothing is
-installed on, written to, or sent to the machines.
+sparkline, load, Herdr agents by status, and whether this plugin is
+installed there. Keys: arrows or h/j/k/l move between cards, Enter opens
+btop on the selected machine, d deploys this plugin to the selected
+machine (deploy = "ask"), r refreshes now, q quits. --once prints a plain
+table and exits. Reads are read-only; the only thing ever installed on
+another machine is this plugin, by a deploy you turned on (--deploy or
+config.toml; the default is off).
 """
 import argparse
 import curses
@@ -19,7 +22,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from statslib import PLUGIN_ID, collect, config, herdr, render  # noqa: E402
+from statslib import (  # noqa: E402
+    PLUGIN_ID, collect, config, deploy, herdr, local_version, render)
 
 ENTER_KEYS = (10, 13, curses.KEY_ENTER)
 # Style name -> (256-colour foreground, 8-colour fallback, extra attribute).
@@ -124,7 +128,8 @@ def put(screen, y, x, text, attr=0):
             pass
 
 
-def draw(screen, styles, interval, poller, view, selected):
+def draw(screen, styles, interval, poller, view, selected, notes=None,
+         message=None):
     rows, _targets, note, updated = view
     height, width = screen.getmaxyx()
     screen.erase()
@@ -132,9 +137,10 @@ def draw(screen, styles, interval, poller, view, selected):
     title = (f" machine stats  {updated or '--:--:--'}  {status}"
              f"  every {interval:g}s")
     put(screen, 0, 0, title.ljust(width), styles["bar"])
-    keys = " arrows move  Enter btop  r refresh  q quit"
-    if note:
-        keys += f"   {note}"
+    keys = " arrows move  Enter btop  d deploy  r refresh  q quit"
+    footer = message or note
+    if footer:
+        keys += f"   {footer}"
     put(screen, height - 1, 0, keys, styles["dim"])
     if not rows:
         screen.refresh()
@@ -143,7 +149,8 @@ def draw(screen, styles, interval, poller, view, selected):
     visible = max(1, (height - 2) // render.CARD_HEIGHT)
     first = max(0, selected // columns - visible + 1) * columns
     with poller.lock:
-        cards = [render.card(row, poller.history, card_width, i == selected)
+        cards = [render.card(row, poller.history, card_width, i == selected,
+                             note=notes[i] if notes else None)
                  for i, row in enumerate(rows)]
     for i, lines in enumerate(cards[first:first + visible * columns]):
         top = 1 + (i // columns) * render.CARD_HEIGHT
@@ -156,17 +163,37 @@ def draw(screen, styles, interval, poller, view, selected):
     screen.refresh()
 
 
-def dashboard(screen, interval):
+def dashboard(screen, interval, mode, mode_note):
     styles = start_colors()
     screen.timeout(250)
     poller = Poller(interval)
-    selected = 0
+    deployer = deploy.Deployer()
+    version = local_version()
+    selected, attempted = 0, set()
+    prompt, message = None, mode_note
     while True:
         view = poller.view()
         rows, targets = view[0] or [], view[1]
         selected = render.step(selected, 0, max(len(rows), 1))
-        draw(screen, styles, interval, poller, view, selected)
+        here = rows[0].snapshot.plugin if rows and rows[0].snapshot else None
+        picks = (deploy.auto_targets(rows, targets, version, attempted)
+                 if mode == "auto" else [])
+        if picks:
+            attempted.update(label for label, _target in picks)
+            message = start_deploys(deployer, here, picks) or message
+        notes = [notes_for(row, i == 0, version, deployer)
+                 for i, row in enumerate(rows)]
+        if prompt:
+            message = f"deploy {version} to {prompt[0]}? y/n"
+        draw(screen, styles, interval, poller, view, selected, notes,
+             message)
         key = screen.getch()
+        if prompt and key != -1:
+            label, target = prompt
+            prompt, message = None, None
+            if key == ord("y"):
+                message = start_deploys(deployer, here, [(label, target)])
+            continue
         columns = render.grid(max(len(rows), 1), screen.getmaxyx()[1])[0]
         moves = {curses.KEY_RIGHT: 1, ord("l"): 1, curses.KEY_LEFT: -1,
                  ord("h"): -1, curses.KEY_DOWN: columns, ord("j"): columns,
@@ -175,6 +202,10 @@ def dashboard(screen, interval):
             return
         if key == ord("r"):
             poller.refresh()
+        elif key == ord("d") and rows:
+            message = ask_deploy(mode, rows, selected, version)
+            if message is None:
+                prompt = (rows[selected].label, targets[selected])
         elif key in moves and rows:
             selected = render.step(selected, moves[key], len(rows))
         elif key in ENTER_KEYS and rows and rows[selected].snapshot:
@@ -183,6 +214,47 @@ def dashboard(screen, interval):
             subprocess.run(collect.drill_argv(targets[selected]))
             curses.reset_prog_mode()
             screen.clear()
+
+
+def notes_for(row, is_here, version, deployer):
+    """The plugin line for one card; this machine is always current."""
+    if row.snapshot is None:
+        return None
+    entry = row.snapshot.plugin
+    state = "current" if is_here and entry else deploy.plugin_state(
+        version, entry)
+    return render.plugin_note(state, entry, deployer.get(row.label))
+
+
+def ask_deploy(mode, rows, selected, version):
+    """None to prompt for the selected card, or the reason not to."""
+    if mode != "ask":
+        return ("deploy is off; set deploy = \"ask\" in config.toml"
+                if mode == "off" else "deploy is automatic in auto mode")
+    if selected == 0:
+        return "this machine runs the plugin already"
+    snap = rows[selected].snapshot
+    if snap is None:
+        return f"{rows[selected].label} is down"
+    state = deploy.plugin_state(version, snap.plugin)
+    if not deploy.deployable(state, snap.plugin):
+        return f"nothing to deploy: plugin {state}" + (
+            " (linked checkout)" if deploy.linked(snap.plugin) else "")
+    return None
+
+
+def start_deploys(deployer, here, picks):
+    """Install the commit this machine runs on each (label, target).
+
+    The commit is looked up once; None on success, else why not.
+    """
+    try:
+        commit = deploy.source_commit(here)
+    except deploy.Refused as exc:
+        return f"deploy refused: {exc}"
+    for label, target in picks:
+        deployer.start(label, target, commit)
+    return None
 
 
 def main(argv=None):
@@ -206,7 +278,8 @@ def main(argv=None):
                 collect.poll(socket.gethostname(), found)):
             print(line)
         return 0
-    curses.wrapper(dashboard, args.interval)
+    mode, mode_note = deploy_mode(args.deploy)
+    curses.wrapper(dashboard, args.interval, mode, mode_note)
     return 0
 
 

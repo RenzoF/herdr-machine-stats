@@ -18,12 +18,17 @@ machine.
 - **Borders**: cyan marks the selected card, yellow an alert (a blocked
   agent, or memory or disk above 90%), red a machine that is down.
 - **Agents**: ◐ blocked, ● working, ○ idle, ✓ done.
+- **Plugin line**: the last line of a card says whether this plugin is
+  installed on that machine (see "Deploying to your machines").
 - **Keys**: arrows or h/j/k/l move, Enter opens btop on the selected
-  machine (over `ssh -t`), r refreshes, q quits.
+  machine (over `ssh -t`), d deploys this plugin to the selected machine
+  (deploy mode "ask"), r refreshes, q quits.
 
 Each machine is read with one non-interactive SSH call running a short
 POSIX shell script (Linux and macOS); CPU is sampled over half a second.
-Nothing is installed on, written to, or sent to the machines.
+Reads are read-only: nothing is written to the machines. The only thing
+ever installed on another machine is this plugin, by an explicit deploy,
+and deploy is off by default.
 
 ## Install
 
@@ -36,6 +41,56 @@ Then run "Open machine stats" from Herdr's actions, or
 dashboard --placement zoomed --focus`. Outside Herdr, run
 `python3 bin/machine-stats` from a checkout; `--once` prints a plain table
 and `--interval N` sets the poll interval (default 10 s).
+
+## Deploying to your machines
+
+Deploy installs this plugin on the other machines from the dashboard, so
+the fleet runs the same version. It is off by default. Set the mode in
+`config.toml` in the plugin's config directory:
+
+```bash
+herdr plugin config-dir renzof.herdr-machine-stats
+```
+
+```toml
+deploy = "ask"   # off | ask | auto
+```
+
+- `off`: never deploys. Pressing `d` says how to turn it on.
+- `ask`: `d` on the selected card asks `deploy <version> to <machine>?
+  y/n`; `y` installs, anything else cancels.
+- `auto`: deploys to each machine that lacks the plugin or runs an older
+  version, once per machine per run of the dashboard, with no key.
+
+`--deploy off|ask|auto` overrides the setting for one run. A missing
+`config.toml` means `off`; an unreadable file or an unknown value also
+falls back to `off`, with a note in the footer.
+
+Each card ends with a plugin line:
+
+- `plugin current`: same version as this machine.
+- `plugin older`, `plugin missing`: deploy can install.
+- `plugin newer`: the machine is ahead of this one; deploy leaves it alone.
+- `plugin linked`: a local checkout is linked into that Herdr; deploy
+  leaves it alone.
+- `plugin unknown`: the machine gave no usable plugin list (for example
+  Herdr is not installed there), or its version is not a plain number.
+- `plugin deploying...`, `plugin deployed`, `plugin failed: <reason>`:
+  the latest deploy. Each install is given 120 seconds.
+
+The command run on each machine, over non-interactive SSH, is:
+
+```bash
+herdr plugin install RenzoF/herdr-machine-stats --ref <commit> --yes
+```
+
+`<commit>` is the commit this machine runs: the commit recorded by a
+GitHub install, or `HEAD` of a linked checkout. Deploy refuses, and says
+why in the footer, when this machine's copy is a linked checkout with
+uncommitted changes or a `HEAD` that is not on GitHub, because the other
+machines could not fetch it. It also refuses to touch a machine that
+runs a newer version or has a linked checkout. Deploy installs nothing
+else: no other plugin, file or setting is touched on the other machines.
 
 ## Requirements
 

@@ -5,6 +5,7 @@ to another machine is ``herdr plugin install`` for this plugin, pinned to
 the commit this machine runs.
 """
 
+import os
 import shlex
 import subprocess
 import threading
@@ -54,10 +55,16 @@ def deployable(state, entry):
 
 
 def run_git(root, *args):
-    """stdout of ``git -C root args``; a failure raises Refused."""
+    """stdout of ``git -C root args``; a failure raises Refused.
+
+    git never reads the terminal, which the dashboard reads keys from,
+    and never prompts for credentials.
+    """
     try:
-        done = subprocess.run(["git", "-C", str(root), *args],
-                              capture_output=True, text=True, timeout=60)
+        done = subprocess.run(
+            ["git", "-C", str(root), *args], capture_output=True, text=True,
+            timeout=60, stdin=subprocess.DEVNULL,
+            env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise Refused(f"git {args[0]} failed: {exc}") from exc
     if done.returncode:
@@ -139,7 +146,8 @@ class Deployer:
     def _install(self, label, target, commit):
         try:
             done = self.run(install_argv(target, commit), capture_output=True,
-                            text=True, timeout=self.timeout)
+                            text=True, timeout=self.timeout,
+                            stdin=subprocess.DEVNULL)
             if done.returncode:
                 lines = (done.stderr or done.stdout or "").strip().splitlines()
                 result = "failed: " + (

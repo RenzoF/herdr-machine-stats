@@ -94,6 +94,18 @@ def test_run_git_turns_a_failure_into_refused(tmp_path):
         deploy.run_git(tmp_path, "rev-parse", "HEAD")  # not a repository
 
 
+def test_run_git_never_reads_the_terminal_or_prompts(monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, "ok\n", "")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert deploy.run_git("/x", "status") == "ok"
+    assert seen["stdin"] is subprocess.DEVNULL
+    assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
 def test_install_argv_installs_the_pinned_commit_over_ssh():
     argv = deploy.install_argv("me@10.0.0.9", "abc123")
     assert argv[:5] == ["ssh", "-o", "BatchMode=yes", "-o",
@@ -150,6 +162,18 @@ def test_deployer_runs_one_install_per_machine_at_a_time():
     release.set()
     deployer.threads["a"].join(5)
     assert len(seen) == 1 and seen[0] == deploy.install_argv("ta", "abc")
+
+
+def test_deployer_installs_without_reading_the_terminal():
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen.update(kwargs)
+        return done()
+    deployer = deploy.Deployer(run=run)
+    deployer.start("a", "ta", "abc")
+    deployer.threads["a"].join(5)
+    assert seen["stdin"] is subprocess.DEVNULL
 
 
 def test_deployer_reports_a_timeout():
