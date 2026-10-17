@@ -1,8 +1,9 @@
 """Machine stats: one row of live stats per machine Herdr knows about.
 
 Everything here is read-only. A machine is polled with one SSH call that
-prints a few facts about the host and the output of ``herdr agent list``;
-nothing is installed on, written to, or sent to the machines.
+prints a few facts about the host, the output of ``herdr agent list`` and
+this plugin's entry in ``herdr plugin list``; nothing is installed on,
+written to, or sent to the machines.
 """
 
 import shlex
@@ -10,21 +11,23 @@ import subprocess
 import threading
 from collections import namedtuple
 
-from statslib import herdr
+from statslib import PLUGIN_ID, herdr
 
 Machine = namedtuple("Machine", "label target enabled")
 Snapshot = namedtuple(
     "Snapshot",
     "os ncpu load cpu_pct mem_pct mem_used_kb mem_total_kb"
-    " disk_pct disk_used_kb disk_total_kb agents",
+    " disk_pct disk_used_kb disk_total_kb agents plugin",
 )
 # One dashboard row: a snapshot, or the reason there is none.
 Row = namedtuple("Row", "label snapshot error")
 
 AGENTS_MARKER = "--agents--"
+PLUGIN_MARKER = "--plugin--"
 
 # POSIX sh, run on every host (Linux and macOS) through ``sh -c``. Prints
-# the facts parse_snapshot reads, then Herdr's agent list after the marker.
+# the facts parse_snapshot reads, then Herdr's agent list and this plugin's
+# entry in its plugin list, each after its marker.
 COLLECT_SCRIPT = f"""\
 PATH=$PATH:/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin
 os=$(uname -s)
@@ -57,6 +60,8 @@ df -Pk "$HOME" | awk 'NR==2 {{print "disk_total_kb=" $2; \
 print "disk_used_kb=" $3; gsub("%", "", $5); print "disk_pct=" $5}}'
 echo {AGENTS_MARKER}
 {herdr.AGENT_LIST_SHELL}
+echo {PLUGIN_MARKER}
+{herdr.plugin_list_shell(PLUGIN_ID)}
 """
 
 
@@ -84,12 +89,14 @@ def parse_machines(text):
 def parse_snapshot(text):
     """Facts about one host from the collector's output.
 
-    ``key=value`` lines come first, then the marker line, then whatever
-    ``herdr agent list`` printed. A missing fact raises ValueError naming
-    it, and a non-numeric one raises ValueError; the agent counts are None
-    when Herdr gave no usable list.
+    ``key=value`` lines come first, then the agents marker and whatever
+    ``herdr agent list`` printed, then the plugin marker and ``herdr plugin
+    list`` for this plugin. A missing fact raises ValueError naming it, and
+    a non-numeric one raises ValueError; the agent counts are None when
+    Herdr gave no usable list.
     """
-    facts_text, _, agents_text = text.partition(AGENTS_MARKER)
+    facts_text, _, rest = text.partition(AGENTS_MARKER)
+    agents_text, _, plugin_text = rest.partition(PLUGIN_MARKER)
     facts = dict(
         line.split("=", 1) for line in facts_text.splitlines() if "=" in line
     )
@@ -108,6 +115,7 @@ def parse_snapshot(text):
             disk_used_kb=int(facts["disk_used_kb"]),
             disk_total_kb=int(facts["disk_total_kb"]),
             agents=herdr.status_counts(agents_text),
+            plugin=herdr.plugin_entry(plugin_text),
         )
     except KeyError as exc:
         raise ValueError(f"collector output lacks {exc.args[0]}") from exc

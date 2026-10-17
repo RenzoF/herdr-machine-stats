@@ -10,7 +10,8 @@ def snap(**changes):
                 mem_used_kb=15 * 1048576, mem_total_kb=23 * 1048576,
                 disk_pct=64, disk_used_kb=74 * 1048576,
                 disk_total_kb=118 * 1048576,
-                agents={"working": 1, "idle": 8, "done": 5})
+                agents={"working": 1, "idle": 8, "done": 5},
+                plugin=None)
     base.update(changes)
     return collect.Snapshot(**base)
 

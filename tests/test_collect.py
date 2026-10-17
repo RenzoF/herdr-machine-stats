@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+import statslib
 from statslib import collect, herdr
 
 # `herdr machine list`: id, label, ssh target, session, state. The two
@@ -110,6 +111,7 @@ def test_collector_output_parses_on_this_host_and_asks_herdr_for_agents(
         fake_herdr):
     shim, calls, canned = fake_herdr
     (canned / "agent-list").write_text(AGENT_LIST)
+    (canned / "plugin-list").write_text(NO_PLUGIN)
     done = run_collector([shim.parent])
     assert done.returncode == 0, done.stderr
     snap = collect.parse_snapshot(done.stdout)
@@ -119,7 +121,11 @@ def test_collector_output_parses_on_this_host_and_asks_herdr_for_agents(
     assert 0 <= snap.cpu_pct <= 100
     assert 0 <= snap.disk_used_kb < snap.disk_total_kb
     assert snap.agents == {"idle": 1, "blocked": 1}
-    assert calls.read_text() == "agent list\n"
+    assert snap.plugin == {}
+    assert calls.read_text().splitlines() == [
+        "agent list",
+        "plugin list --plugin renzof.herdr-machine-stats --json",
+    ]
 
 
 def write_shim(directory, name, body):
@@ -260,7 +266,8 @@ def snap(**changes):
     base = dict(os="Linux", ncpu=12, load=7.63, cpu_pct=46, mem_pct=75,
                 mem_used_kb=18000000, mem_total_kb=24000000, disk_pct=64,
                 disk_used_kb=77594624, disk_total_kb=123731968,
-                agents={"idle": 2, "blocked": 1, "working": 1})
+                agents={"idle": 2, "blocked": 1, "working": 1},
+                plugin=None)
     base.update(changes)
     return collect.Snapshot(**base)
 
@@ -458,3 +465,46 @@ def test_drill_gives_the_monitor_a_utf8_locale(tmp_path, monkeypatch,
     done = subprocess.run(collect.drill_argv(None, "fake-monitor"),
                           capture_output=True, text=True, timeout=10)
     assert done.stdout == f"{want}\n"
+
+
+PLUGIN_LIST = (
+    '{"id":"cli:plugin","result":{"plugins":[{"plugin_id":'
+    '"renzof.herdr-machine-stats","version":"0.2.0","plugin_root":'
+    '"/opt/p","source":{"kind":"github","resolved_commit":"c0ffee"}}],'
+    '"type":"plugin_list"}}'
+)
+NO_PLUGIN = '{"id":"cli:plugin","result":{"plugins":[],"type":"plugin_list"}}'
+
+
+def test_local_version_reads_the_manifest(tmp_path):
+    (tmp_path / "herdr-plugin.toml").write_text(
+        'id = "x"\nversion = "9.8.7"\n')
+    assert statslib.local_version(tmp_path) == "9.8.7"
+
+
+def test_the_manifest_id_is_the_id_the_code_uses():
+    import tomllib
+    with open(statslib.PLUGIN_ROOT / "herdr-plugin.toml", "rb") as f:
+        manifest = tomllib.load(f)
+    assert manifest["id"] == statslib.PLUGIN_ID
+    assert statslib.PLUGIN_ID in manifest["actions"][0]["command"]
+
+
+@pytest.mark.parametrize("text, want", [
+    (PLUGIN_LIST, "0.2.0"),
+    (NO_PLUGIN, {}),
+    ("", None),
+    ("not json", None),
+    ('{"result":{"plugins":"x"}}', None),
+])
+def test_plugin_entry_tells_installed_missing_and_unreadable_apart(text, want):
+    entry = herdr.plugin_entry(text)
+    assert (entry["version"] if isinstance(entry, dict) and entry
+            else entry) == want
+
+
+def test_parse_snapshot_reads_the_plugin_entry_after_its_marker():
+    snap = collect.parse_snapshot(SNAPSHOT + "--plugin--\n" + PLUGIN_LIST)
+    assert snap.plugin["source"]["resolved_commit"] == "c0ffee"
+    assert snap.agents == {"idle": 2, "blocked": 1, "working": 1}
+    assert collect.parse_snapshot(SNAPSHOT).plugin is None
