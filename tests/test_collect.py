@@ -422,7 +422,9 @@ def test_dashboard_draws_machine_cards_and_quits_on_q(fleet_env):
                    [sys.executable, str(REPO / "bin" / "machine-stats")], env)
     seen = b""
     deadline = time.monotonic() + 20
-    while b"MBP" not in seen and time.monotonic() < deadline:
+    # A read can end mid-frame: MBP is on a card's top line, CPU below it.
+    while (b"MBP" not in seen or b"CPU" not in seen) and (
+            time.monotonic() < deadline):
         ready, _, _ = select.select([fd], [], [], 0.5)
         if ready:
             try:
