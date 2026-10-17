@@ -13,7 +13,11 @@ from collections import namedtuple
 from fleetlib import herdr
 
 Machine = namedtuple("Machine", "label target enabled")
-Snapshot = namedtuple("Snapshot", "os ncpu load mem_pct disk_pct agents")
+Snapshot = namedtuple(
+    "Snapshot",
+    "os ncpu load cpu_pct mem_pct mem_used_kb mem_total_kb"
+    " disk_pct disk_used_kb disk_total_kb agents",
+)
 # One dashboard row: a snapshot, or the reason there is none.
 Row = namedtuple("Row", "label snapshot error")
 
@@ -28,6 +32,8 @@ echo "os=$os"
 if [ "$os" = Darwin ]; then
   echo "ncpu=$(sysctl -n hw.ncpu)"
   echo "load=$(sysctl -n vm.loadavg | awk '{{print $2}}')"
+  top -l 2 -n 0 -s 1 | awk '/CPU usage/ {{idle=$7}} \
+END {{printf "cpu_pct=%d\\n", 100 - idle + 0.5}}'
   echo "mem_total_kb=$(( $(sysctl -n hw.memsize) / 1024 ))"
   vm_stat | awk '/page size of/ {{ps=$8}} /Pages free/ {{n+=$3}} \
 /Pages inactive/ {{n+=$3}} /Pages speculative/ {{n+=$3}} \
@@ -35,10 +41,20 @@ END {{printf "mem_avail_kb=%d\\n", n*ps/1024}}'
 else
   echo "ncpu=$(nproc)"
   echo "load=$(cut -d' ' -f1 /proc/loadavg)"
+  # printf, not print: mawk writes large counters as 9.67e+09.
+  cpu() {{
+    awk '/^cpu / {{printf "%.0f %.0f\\n", $2+$3+$4+$5+$6+$7+$8+$9, $5+$6}}' \\
+      /proc/stat
+  }}
+  set -- $(cpu); total=$1 idle=$2; sleep 0.5; set -- $(cpu)
+  busy=$(( ($1 - total) - ($2 - idle) )); span=$(( $1 - total ))
+  [ "$span" -gt 0 ] || span=1
+  echo "cpu_pct=$(( (100 * busy + span / 2) / span ))"
   awk '/^MemTotal:/ {{print "mem_total_kb=" $2}} \
 /^MemAvailable:/ {{print "mem_avail_kb=" $2}}' /proc/meminfo
 fi
-echo "disk_pct=$(df -Pk "$HOME" | awk 'NR==2 {{gsub("%", "", $5); print $5}}')"
+df -Pk "$HOME" | awk 'NR==2 {{print "disk_total_kb=" $2; \
+print "disk_used_kb=" $3; gsub("%", "", $5); print "disk_pct=" $5}}'
 echo {AGENTS_MARKER}
 {herdr.AGENT_LIST_SHELL}
 """
@@ -84,8 +100,13 @@ def parse_snapshot(text):
             os=facts["os"],
             ncpu=int(facts["ncpu"]),
             load=float(facts["load"]),
+            cpu_pct=int(facts["cpu_pct"]),
             mem_pct=0,
+            mem_used_kb=total - avail,
+            mem_total_kb=total,
             disk_pct=int(facts["disk_pct"]),
+            disk_used_kb=int(facts["disk_used_kb"]),
+            disk_total_kb=int(facts["disk_total_kb"]),
             agents=herdr.status_counts(agents_text),
         )
     except KeyError as exc:
@@ -180,7 +201,7 @@ def drill_argv(target, program="btop", pause=2):
     return ["ssh", "-t", target, "sh -c " + shlex.quote(script)]
 
 
-HEADER = ("MACHINE", "LOAD", "MEM", "DISK", "AGENTS")
+HEADER = ("MACHINE", "CPU", "LOAD", "MEM", "DISK", "AGENTS")
 # Statuses in the order that matters to a person watching: stuck first.
 STATUS_ORDER = ("blocked", "working", "idle", "done", "unknown")
 LIMIT_PCT = 90  # memory or disk above this is flagged
@@ -214,8 +235,9 @@ def row_cells(row):
         if row.error == "disabled":
             return [row.label, "disabled"]
         return [row.label, f"down: {row.error}"]
-    return [row.label, f"{snap.load:.1f}/{snap.ncpu}", f"{snap.mem_pct}%",
-            f"{snap.disk_pct}%", _agents_cell(snap.agents)]
+    return [row.label, f"{snap.cpu_pct}%", f"{snap.load:.1f}/{snap.ncpu}",
+            f"{snap.mem_pct}%", f"{snap.disk_pct}%",
+            _agents_cell(snap.agents)]
 
 
 def format_table(rows):

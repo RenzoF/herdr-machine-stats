@@ -49,8 +49,11 @@ SNAPSHOT = (
     "os=Linux\n"
     "ncpu=12\n"
     "load=7.63\n"
+    "cpu_pct=46\n"
     "mem_total_kb=24000000\n"
     "mem_avail_kb=6000000\n"
+    "disk_total_kb=123731968\n"
+    "disk_used_kb=77594624\n"
     "disk_pct=64\n"
     "--agents--\n"
     '{"id":"cli:agent:list","result":{"agents":['
@@ -65,7 +68,10 @@ def test_parse_snapshot_derives_memory_percent_and_counts_agents():
     snap = fleet.parse_snapshot(SNAPSHOT)
     # (24000000 - 6000000) / 24000000 of memory is in use.
     assert (snap.os, snap.ncpu, snap.load) == ("Linux", 12, 7.63)
+    assert snap.cpu_pct == 46
     assert (snap.mem_pct, snap.disk_pct) == (75, 64)
+    assert (snap.mem_used_kb, snap.mem_total_kb) == (18000000, 24000000)
+    assert (snap.disk_used_kb, snap.disk_total_kb) == (77594624, 123731968)
     assert snap.agents == {"idle": 2, "blocked": 1, "working": 1}
 
 
@@ -109,6 +115,8 @@ def test_collector_output_parses_on_this_host_and_asks_herdr_for_agents(
     assert snap.os == platform.system()
     assert snap.ncpu >= 1 and snap.load >= 0
     assert 0 <= snap.mem_pct <= 100 and 0 <= snap.disk_pct <= 100
+    assert 0 <= snap.cpu_pct <= 100
+    assert 0 <= snap.disk_used_kb < snap.disk_total_kb
     assert snap.agents == {"idle": 1, "blocked": 1}
     assert calls.read_text() == "agent list\n"
 
@@ -136,12 +144,17 @@ def test_collector_reads_macos_memory_and_load_from_sysctl_and_vm_stat(
         "Pages inactive:                           200000.\n"
         "Pages speculative:                         50000.\n"
         "EOF\n"))
+    # `top -l 2` prints two samples; the first covers time since boot.
+    write_shim(tmp_path, "top", (
+        'echo "CPU usage: 50.00% user, 20.00% sys, 30.00% idle"\n'
+        'echo "CPU usage: 9.12% user, 4.34% sys, 86.54% idle"\n'))
     done = run_collector([tmp_path])
     assert done.returncode == 0, done.stderr
     snap = fleet.parse_snapshot(done.stdout)
     # 24 GiB total, (100000 + 200000 + 50000) pages of 16 KiB available.
     assert (snap.os, snap.ncpu, snap.load) == ("Darwin", 10, 3.71)
     assert snap.mem_pct == 78
+    assert snap.cpu_pct == 13  # 100 - 86.54, from the second sample
 
 
 def machine(label="lab", target="me@10.0.0.9", enabled=True):
@@ -243,7 +256,9 @@ def test_run_host_gives_up_on_a_hung_host(tmp_path, monkeypatch):
 
 
 def snap(**changes):
-    base = dict(os="Linux", ncpu=12, load=7.63, mem_pct=75, disk_pct=64,
+    base = dict(os="Linux", ncpu=12, load=7.63, cpu_pct=46, mem_pct=75,
+                mem_used_kb=18000000, mem_total_kb=24000000, disk_pct=64,
+                disk_used_kb=77594624, disk_total_kb=123731968,
                 agents={"idle": 2, "blocked": 1, "working": 1})
     base.update(changes)
     return fleet.Snapshot(**base)
@@ -256,7 +271,7 @@ def cells(line):
 def test_format_table_lists_every_machine_under_a_header():
     rows = [
         fleet.Row("agent-desk", snap(), None),
-        fleet.Row("omarchy", snap(load=0.05, ncpu=8, mem_pct=9,
+        fleet.Row("omarchy", snap(load=0.05, ncpu=8, cpu_pct=1, mem_pct=9,
                                   disk_pct=5, agents=None), None),
         fleet.Row("lenovo", snap(agents={}), None),
         fleet.Row("mini", None, "Permission denied (publickey)."),
@@ -264,11 +279,11 @@ def test_format_table_lists_every_machine_under_a_header():
     ]
     got = [cells(line) for line in fleet.format_table(rows)]
     assert got == [
-        ["MACHINE", "LOAD", "MEM", "DISK", "AGENTS"],
-        ["agent-desk", "7.6/12", "75%", "64%",
+        ["MACHINE", "CPU", "LOAD", "MEM", "DISK", "AGENTS"],
+        ["agent-desk", "46%", "7.6/12", "75%", "64%",
          "blocked 1, working 1, idle 2"],
-        ["omarchy", "0.1/8", "9%", "5%", "-"],
-        ["lenovo", "7.6/12", "75%", "64%", "none"],
+        ["omarchy", "1%", "0.1/8", "9%", "5%", "-"],
+        ["lenovo", "46%", "7.6/12", "75%", "64%", "none"],
         ["mini", "down: Permission denied (publickey)."],
         ["macmini", "disabled"],
     ]
@@ -379,9 +394,9 @@ def test_once_prints_this_machine_and_every_saved_one(fleet_env, capsys):
     cmd = load_fleet_command()
     assert cmd.main(["--once"]) == 0
     rows = [cells(line) for line in capsys.readouterr().out.splitlines()]
-    assert rows[0] == ["MACHINE", "LOAD", "MEM", "DISK", "AGENTS"]
+    assert rows[0] == ["MACHINE", "CPU", "LOAD", "MEM", "DISK", "AGENTS"]
     assert rows[1][0] == socket.gethostname()
-    assert rows[1][4] == rows[2][4] == "blocked 1, idle 1"
+    assert rows[1][5] == rows[2][5] == "blocked 1, idle 1"
     assert rows[2][0] == "MBP"
     assert rows[3] == ["macmini", "disabled"]
 
