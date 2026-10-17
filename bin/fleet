@@ -3,11 +3,11 @@
 
 fleet [--interval SECONDS] [--once]
 
-One row per machine: load against cores, memory and disk use, and Herdr
-agents by status. Keys: up/down (or j/k) select, Enter opens btop on the
-selected machine, r refreshes now, q quits. --once prints the table and
-exits. Read-only: nothing is installed on, written to, or sent to the
-machines.
+One card per machine: CPU, memory and disk gauges, a CPU history
+sparkline, load, and Herdr agents by status. Keys: arrows or h/j/k/l move
+between cards, Enter opens btop on the selected machine, r refreshes now,
+q quits. --once prints a plain table and exits. Read-only: nothing is
+installed on, written to, or sent to the machines.
 """
 import argparse
 import curses
@@ -19,9 +19,22 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fleetlib import collect as fleet, herdr  # noqa: E402
+from fleetlib import collect as fleet, herdr, render  # noqa: E402
 
 ENTER_KEYS = (10, 13, curses.KEY_ENTER)
+# Style name -> (256-colour foreground, 8-colour fallback, extra attribute).
+PALETTE = {
+    "green": (114, curses.COLOR_GREEN, 0),
+    "yellow": (221, curses.COLOR_YELLOW, 0),
+    "red": (203, curses.COLOR_RED, 0),
+    "blue": (75, curses.COLOR_BLUE, 0),
+    "spark": (80, curses.COLOR_CYAN, 0),
+    "border": (240, curses.COLOR_WHITE, 0),
+    "selected": (51, curses.COLOR_CYAN, curses.A_BOLD),
+    "title": (255, curses.COLOR_WHITE, curses.A_BOLD),
+    "dim": (243, curses.COLOR_WHITE, curses.A_DIM),
+    "bar": (16, curses.COLOR_BLACK, curses.A_BOLD),
+}
 
 
 def load_machines():
@@ -39,6 +52,7 @@ class Poller:
         self.interval = interval
         self.lock = threading.Lock()
         self.wake = threading.Event()
+        self.history = render.History()
         self.rows, self.targets, self.note, self.updated = None, [], None, ""
         threading.Thread(target=self.loop, daemon=True).start()
 
@@ -47,6 +61,7 @@ class Poller:
             found, note = load_machines()
             rows = fleet.poll(socket.gethostname(), found)
             with self.lock:
+                self.history.record(rows)
                 self.rows = rows
                 self.targets = [None, *(m.target for m in found)]
                 self.note = note
@@ -63,46 +78,70 @@ class Poller:
 
 
 def start_colors():
+    """Style name -> curses attribute, as colourful as the terminal allows."""
     try:
         curses.curs_set(0)
     except curses.error:
         pass
+    styles = {name: extra for name, (_c, _f, extra) in PALETTE.items()}
     if not curses.has_colors():
-        return {}
+        styles["selected"] = curses.A_REVERSE
+        return styles
     curses.start_color()
     try:
         curses.use_default_colors()
         background = -1
     except curses.error:
         background = curses.COLOR_BLACK
-    curses.init_pair(1, curses.COLOR_RED, background)
-    red = curses.color_pair(1)
-    return {"down": red, "alert": red, "dim": curses.A_DIM}
+    rich = curses.COLORS >= 256
+    for pair, (name, (full, basic, extra)) in enumerate(
+            PALETTE.items(), start=1):
+        back = background
+        if name == "bar":  # the title bar: dark text on cyan
+            back = 80 if rich else curses.COLOR_CYAN
+        curses.init_pair(pair, full if rich else basic, back)
+        styles[name] = curses.color_pair(pair) | extra
+    return styles
 
 
-def put(screen, y, text, attr=0):
+def put(screen, y, x, text, attr=0):
+    """Write within the screen; curses refuses the bottom-right cell."""
     height, width = screen.getmaxyx()
-    if y < height:
-        screen.addnstr(y, 0, text, max(width - 1, 0), attr)
+    if 0 <= y < height and x < width:
+        try:
+            screen.addnstr(y, x, text, width - x, attr)
+        except curses.error:
+            pass
 
 
-def draw(screen, styles, interval, view, selected):
+def draw(screen, styles, interval, poller, view, selected):
     rows, _targets, note, updated = view
+    height, width = screen.getmaxyx()
     screen.erase()
-    put(screen, 0, f"fleet  updated {updated or '-'}  every {interval:g}s"
-        "   up/down select  Enter btop  r refresh  q quit", curses.A_BOLD)
-    if rows is None:
-        put(screen, 2, "polling...")
-    else:
-        lines = fleet.format_table(rows)
-        put(screen, 2, lines[0], curses.A_BOLD)
-        for i, (row, line) in enumerate(zip(rows, lines[1:])):
-            attr = styles.get(fleet.row_level(row), 0)
-            if i == selected:
-                attr |= curses.A_REVERSE
-            put(screen, 3 + i, line, attr)
+    status = render.summary(rows) if rows else "polling..."
+    title = f" fleet  {updated or '--:--:--'}  {status}  every {interval:g}s"
+    put(screen, 0, 0, title.ljust(width), styles["bar"])
+    keys = " arrows move  Enter btop  r refresh  q quit"
     if note:
-        put(screen, 4 + len(rows or []), note)
+        keys += f"   {note}"
+    put(screen, height - 1, 0, keys, styles["dim"])
+    if not rows:
+        screen.refresh()
+        return
+    columns, card_width = render.grid(len(rows), width)
+    visible = max(1, (height - 2) // render.CARD_HEIGHT)
+    first = max(0, selected // columns - visible + 1) * columns
+    with poller.lock:
+        cards = [render.card(row, poller.history, card_width, i == selected)
+                 for i, row in enumerate(rows)]
+    for i, lines in enumerate(cards[first:first + visible * columns]):
+        top = 1 + (i // columns) * render.CARD_HEIGHT
+        left = (i % columns) * card_width
+        for n, line in enumerate(lines):
+            x = left
+            for text, style in line:
+                put(screen, top + n, x, text, styles.get(style, 0))
+                x += len(text)
     screen.refresh()
 
 
@@ -114,17 +153,19 @@ def dashboard(screen, interval):
     while True:
         view = poller.view()
         rows, targets = view[0] or [], view[1]
-        selected = min(selected, max(len(rows) - 1, 0))
-        draw(screen, styles, interval, view, selected)
+        selected = render.step(selected, 0, max(len(rows), 1))
+        draw(screen, styles, interval, poller, view, selected)
         key = screen.getch()
+        columns = render.grid(max(len(rows), 1), screen.getmaxyx()[1])[0]
+        moves = {curses.KEY_RIGHT: 1, ord("l"): 1, curses.KEY_LEFT: -1,
+                 ord("h"): -1, curses.KEY_DOWN: columns, ord("j"): columns,
+                 curses.KEY_UP: -columns, ord("k"): -columns}
         if key in (ord("q"), 27):
             return
         if key == ord("r"):
             poller.refresh()
-        elif key in (curses.KEY_DOWN, ord("j")):
-            selected = min(selected + 1, max(len(rows) - 1, 0))
-        elif key in (curses.KEY_UP, ord("k")):
-            selected = max(selected - 1, 0)
+        elif key in moves and rows:
+            selected = render.step(selected, moves[key], len(rows))
         elif key in ENTER_KEYS and rows and rows[selected].snapshot:
             curses.def_prog_mode()
             curses.endwin()

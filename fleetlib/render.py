@@ -154,3 +154,21 @@ def card(row, history, width, selected=False):
     sides = [[("│", edge), *line, ("│", edge)] for line in body]
     bottom = [("╰", edge), ("─" * inner, edge), ("╯", edge)]
     return [top, *sides, bottom]
+
+
+def summary(rows):
+    """One line for the title bar, for example "6 machines · 5 up"."""
+    levels = [row_level(row) for row in rows]
+    noun = "machine" if len(rows) == 1 else "machines"
+    parts = [f"{len(rows)} {noun}",
+             f"{sum(row.snapshot is not None for row in rows)} up"]
+    if levels.count("down"):
+        parts.append(f"{levels.count('down')} down")
+    if levels.count("alert"):
+        parts.append(f"{levels.count('alert')} alert")
+    return " · ".join(parts)
+
+
+def step(selected, delta, count):
+    """The selection after moving ``delta`` cards, kept on a card."""
+    return max(0, min(count - 1, selected + delta))

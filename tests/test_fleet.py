@@ -412,7 +412,7 @@ def test_once_still_shows_this_machine_when_herdr_is_missing(
     assert "herdr" in err
 
 
-def test_dashboard_draws_the_table_and_quits_on_q(fleet_env):
+def test_dashboard_draws_machine_cards_and_quits_on_q(fleet_env):
     env = dict(os.environ, TERM="xterm", COLUMNS="100", LINES="20")
     pid, fd = pty.fork()
     if pid == 0:
@@ -433,7 +433,8 @@ def test_dashboard_draws_the_table_and_quits_on_q(fleet_env):
         pass
     _, status = os.waitpid(pid, 0)
     os.close(fd)
-    assert b"MACHINE" in seen and b"MBP" in seen
+    assert b"MBP" in seen and b"CPU" in seen
+    assert b"MACHINE" not in seen  # cards, not the --once table
     assert os.waitstatus_to_exitcode(status) == 0
 
 

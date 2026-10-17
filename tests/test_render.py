@@ -127,3 +127,22 @@ def test_a_down_card_names_the_reason_within_its_width():
     lines = card(collect.Row("macmini", None, "x" * 80), width=40)
     assert [len(text(line)) for line in lines] == [40] * render.CARD_HEIGHT
     assert "down: xxx" in text(lines[1])
+
+
+def test_summary_counts_machines_that_are_up_down_and_alerting():
+    rows = [collect.Row("a", snap(agents={}), None),
+            collect.Row("b", snap(agents={"blocked": 1}), None),
+            collect.Row("c", None, "timeout"),
+            collect.Row("d", None, "disabled")]
+    assert render.summary(rows) == "4 machines · 2 up · 1 down · 1 alert"
+    assert render.summary(rows[:1]) == "1 machine · 1 up"
+
+
+@pytest.mark.parametrize("selected, delta, want", [
+    (0, 1, 1), (4, 1, 4),  # stops at the last card
+    (1, -1, 0), (0, -1, 0),  # and at the first
+    (1, 3, 4), (4, -3, 1),  # a row down or up in three columns
+    (2, 3, 4),  # a row down from the end lands on the last card
+])
+def test_step_moves_the_selection_and_stays_on_a_card(selected, delta, want):
+    assert render.step(selected, delta, 5) == want
