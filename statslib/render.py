@@ -6,8 +6,9 @@ terminal colours by the curses front end (``bin/machine-stats``).
 """
 
 from statslib.collect import row_level
+from statslib.deploy import linked
 
-CARD_HEIGHT = 6
+CARD_HEIGHT = 7
 MIN_CARD = 40  # narrower cards leave the gauges too short to read
 TAIL = 8  # columns after each gauge: sparkline or used/total size
 SPARKS = "▁▂▃▄▅▆▇█"
@@ -18,6 +19,8 @@ AGENT_MARKS = (
     ("idle", "○", "dim"),
     ("done", "✓", "blue"),
 )
+NOTE_STYLES = {"current": "green", "older": "yellow", "newer": "blue",
+               "missing": "yellow", "unknown": "dim"}
 
 
 def bar(pct, width):
@@ -114,6 +117,17 @@ def _footer(snap, inner):
     return _fit(parts, inner)
 
 
+def plugin_note(state, entry, status):
+    """The card's plugin line: the latest deploy, else the state."""
+    if status:
+        style = ("red" if status.startswith("failed")
+                 else "green" if status == "deployed" else "yellow")
+        return f"plugin {status}", style
+    if linked(entry):
+        return "plugin linked", "dim"
+    return f"plugin {state}", NOTE_STYLES.get(state, "dim")
+
+
 def _border(row, selected):
     if selected:
         return "selected"
@@ -121,8 +135,11 @@ def _border(row, selected):
         row_level(row), "border")
 
 
-def card(row, history, width, selected=False):
-    """The lines of one machine's card, each exactly ``width`` wide."""
+def card(row, history, width, selected=False, note=None):
+    """The lines of one machine's card, each exactly ``width`` wide.
+
+    ``note`` is an optional ``(text, style)`` pair for the plugin line.
+    """
     edge = _border(row, selected)
     inner = width - 2
     snap = row.snapshot
@@ -150,6 +167,7 @@ def card(row, history, width, selected=False):
                    _size(snap.disk_used_kb, snap.disk_total_kb), "label",
                    inner),
             _footer(snap, inner),
+            _fit([(f" {note[0]}", note[1])] if note else [], inner),
         ]
     sides = [[("│", edge), *line, ("│", edge)] for line in body]
     bottom = [("╰", edge), ("─" * inner, edge), ("╯", edge)]

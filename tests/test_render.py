@@ -147,3 +147,33 @@ def test_summary_counts_machines_that_are_up_down_and_alerting():
 ])
 def test_step_moves_the_selection_and_stays_on_a_card(selected, delta, want):
     assert render.step(selected, delta, 5) == want
+
+
+@pytest.mark.parametrize("state, entry, status, want", [
+    ("current", {"source": {"kind": "github"}}, None,
+     ("plugin current", "green")),
+    ("current", {"source": {"kind": "local"}}, None,
+     ("plugin linked", "dim")),
+    ("older", {"source": {"kind": "github"}}, None,
+     ("plugin older", "yellow")),
+    ("newer", {"source": {"kind": "github"}}, None,
+     ("plugin newer", "blue")),
+    ("missing", {}, None, ("plugin missing", "yellow")),
+    ("unknown", None, None, ("plugin unknown", "dim")),
+    ("missing", {}, "deploying...", ("plugin deploying...", "yellow")),
+    ("missing", {}, "deployed", ("plugin deployed", "green")),
+    ("missing", {}, "failed: timeout", ("plugin failed: timeout", "red")),
+])
+def test_plugin_note_shows_state_or_the_latest_deploy(
+        state, entry, status, want):
+    assert render.plugin_note(state, entry, status) == want
+
+
+def test_card_draws_the_plugin_note_under_the_agents():
+    history = render.History()
+    lines = render.card(collect.Row("a", snap(), None), history, 46,
+                        note=("plugin missing", "yellow"))
+    assert len(lines) == render.CARD_HEIGHT == 7
+    assert "plugin missing" in text(lines[5])
+    assert styles_of(lines[5], " plugin missing") == ["yellow"]
+    assert all(len(text(line)) == 46 for line in lines)
