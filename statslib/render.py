@@ -190,3 +190,103 @@ def summary(rows):
 def step(selected, delta, count):
     """The selection after moving ``delta`` cards, kept on a card."""
     return max(0, min(count - 1, selected + delta))
+
+
+# -- the pipeline card ---------------------------------------------------
+
+LEVEL_EDGES = {"stuck": "red", "attention": "yellow", "ok": "border",
+               "unreachable": "dim"}
+LEVEL_STYLES = {"stuck": "red", "attention": "yellow", "ok": "green"}
+WORKER_LINES = CARD_HEIGHT - 4  # the body minus the counters and verdict
+
+
+def age_text(seconds):
+    """A short age: 45s, 12m, 3h05m, 2d."""
+    if seconds is None:
+        return "?"
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h{seconds % 3600 // 60:02d}m"
+    return f"{seconds // 86400}d"
+
+
+def _worker_lines(workers, inner):
+    shown = workers
+    if len(workers) > WORKER_LINES:
+        shown = workers[:WORKER_LINES - 1]
+    name = max((len(w.name) for w in shown), default=0)
+    stage = max((len(w.stage or "") for w in shown), default=0)
+    ref = max((len(w.ref) for w in shown), default=0)
+    lines = []
+    for w in shown:
+        if w.stage is None:
+            idle = "idle" + (f" {age_text(w.age)}" if w.age is not None
+                             else "")
+            lines.append(_fit([(f" {w.name:<{name}} ", "label"),
+                               (idle, "dim")], inner))
+            continue
+        parts = [(f" {w.name:<{name}} ", "label"),
+                 (f"{w.stage:<{stage}} ", "text"),
+                 (f"{w.ref:<{ref}} ", "title"),
+                 (f"{age_text(w.age):>4}", "text")]
+        if w.harness:
+            parts.append((f" {w.harness}", "dim"))
+        lines.append(_fit(parts, inner))
+    if len(workers) > WORKER_LINES:
+        lines.append(_fit([(f" +{len(workers) - len(shown)} more", "dim")],
+                          inner))
+    return lines + [_fit([], inner)] * (WORKER_LINES - len(lines))
+
+
+def _counters(view, inner):
+    parts = [(" ", "text")]
+    if view.ci is not None:
+        in_use, cap = view.ci
+        full = in_use >= cap and view.waiting
+        parts += [(f"CI {in_use}/{cap}", "yellow" if full else "label"),
+                  ("  ", "text")]
+    parts += [(f"waiting {view.waiting}", "label"), ("  ", "text"),
+              (f"failed {view.failed}",
+               "yellow" if view.failed else "label"), ("  ", "text"),
+              (f"cards {view.cards}", "yellow" if view.cards else "label")]
+    return _fit(parts, inner)
+
+
+def pipeline_card(view, width):
+    """The pipeline card's lines, each exactly ``width`` wide.
+
+    ``view`` is a ``pipeline.View`` (nothing yet: None, drawn as polling).
+    """
+    inner = width - 2
+    level = view.level if view else "unreachable"
+    edge = LEVEL_EDGES[level]
+    info = ""
+    if view and view.error is None and view.capacity is not None:
+        noun = "worker" if view.capacity == 1 else "workers"
+        info = f" {view.capacity} {noun} "
+    name = "pipeline"
+    fill = width - 6 - len(name) - len(info)
+    if fill < 1:
+        info, fill = "", width - 6 - len(name)
+    top = [("╭─ ", edge), (name, "title"), (" ", edge),
+           ("─" * max(0, fill), edge), (info, "dim"), ("─╮", edge)]
+    blank = _fit([], inner)
+    if view is None:
+        body = [_fit([(" polling...", "dim")], inner)]
+        body += [blank] * (CARD_HEIGHT - 3)
+    elif view.error is not None:
+        body = [_fit([(" unreachable", "yellow"),
+                      (f": {view.error}", "dim")], inner)]
+        body += [blank] * (CARD_HEIGHT - 3)
+    else:
+        last = ("no lease yet" if view.last_lease is None
+                else f"last lease {age_text(view.last_lease)} ago")
+        body = [*_worker_lines(view.workers, inner), _counters(view, inner),
+                _fit([(f" {view.verdict}", LEVEL_STYLES[view.level]),
+                      (f"  {last}", "dim")], inner)]
+    sides = [[("│", edge), *line, ("│", edge)] for line in body]
+    bottom = [("╰", edge), ("─" * inner, edge), ("╯", edge)]
+    return [top, *sides, bottom]

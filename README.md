@@ -103,6 +103,44 @@ deploys to a machine that runs a newer version or has a linked checkout;
 in ask mode `d` says so in the footer. Deploy installs nothing else: no
 other plugin, file or setting is touched on the other machines.
 
+## Pipeline card
+
+An optional extra card shows an
+rwb-dispatcher pipeline: what each
+worker is doing, whether work is moving, and whether anything needs you.
+It reads the dispatcher's `/status` (JSON over HTTP) and nothing else; no
+key acts on the pipeline and no worker is contacted. It is off by default.
+Set the URL in `config.toml` (or pass `--pipeline URL`; `--pipeline ''`
+turns it off for one run):
+
+```toml
+pipeline_url = "http://10.10.10.231:8787/status"   # default "": no card
+```
+
+```
+╭─ pipeline ───────────────────────── 2 workers ─╮
+│ worker-1 implement 3PLAddons#630  12m claude   │
+│ worker-2 review    rfpit-ops#194   4m codex    │
+│                                                │
+│ CI 2/2  waiting 13  failed 1  cards 0          │
+│ ! 1 job failed  last lease 4m ago              │
+╰────────────────────────────────────────────────╯
+```
+
+- **Workers**: stage, repository#issue, how long the lease has run and the
+  harness (`claude`, `codex`); a free worker says `idle` and for how long.
+- **Counters**: CI slots in use, issues waiting to start, failed jobs and
+  cards waiting on a person (all repositories).
+- **Borders**: red is stuck (workers idle with work waiting, a repository's
+  lane gave up, the dispatcher not ok), yellow needs a person (draining, a
+  held repository, cards, a failed job, an account needing attention),
+  grey is fine. A dim border with `unreachable: <reason>` means the
+  dispatcher did not answer within 3 seconds (for example from a machine
+  that cannot reach it); that is not an alert.
+- The card is not selectable, and only `http://` and `https://` URLs are
+  used. It is polled in the background at the same interval as the
+  machines.
+
 ## Requirements
 
 - Python 3.11+ on the machine that runs the dashboard (standard library

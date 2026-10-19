@@ -2,7 +2,7 @@
 
 import pytest
 
-from statslib import collect, render
+from statslib import collect, pipeline, render
 
 
 def snap(**changes):
@@ -179,3 +179,108 @@ def test_card_draws_the_plugin_note_under_the_agents():
     assert "plugin missing" in text(lines[5])
     assert styles_of(lines[5], " plugin missing") == ["yellow"]
     assert all(len(text(line)) == 46 for line in lines)
+
+
+# -- the pipeline card ---------------------------------------------------
+
+def busy(name, stage, ref, age, harness):
+    return pipeline.Worker(name, stage, ref, age, harness)
+
+
+def view(**changes):
+    base = dict(
+        error=None, capacity=2,
+        workers=[busy("worker-1", "implement", "3PLAddons#630", 720,
+                      "claude"),
+                 busy("worker-2", "review", "rfpit-ops#194", 240,
+                      "codex")],
+        ci=(2, 2), waiting=13, failed=1, cards=0, last_lease=240,
+        level="attention", verdict="! 1 job failed")
+    base.update(changes)
+    return pipeline.View(**base)
+
+
+def test_the_pipeline_card_shows_each_worker_the_counters_and_the_verdict():
+    lines = render.pipeline_card(view(), 50)
+    assert [text(line) for line in lines] == [
+        "╭─ pipeline ───────────────────────── 2 workers ─╮",
+        "│ worker-1 implement 3PLAddons#630  12m claude   │",
+        "│ worker-2 review    rfpit-ops#194   4m codex    │",
+        "│                                                │",
+        "│ CI 2/2  waiting 13  failed 1  cards 0          │",
+        "│ ! 1 job failed  last lease 4m ago              │",
+        "╰────────────────────────────────────────────────╯",
+    ]
+
+
+@pytest.mark.parametrize("width", [30, 40, 41, 50, 77, 120])
+@pytest.mark.parametrize("changes", [
+    {}, {"error": "timed out", "level": "unreachable"},
+    {"workers": [], "capacity": 0, "ci": None, "last_lease": None},
+    {"workers": [busy(f"worker-{n}", "implement", "A-very-long-repo#1", 5,
+                      "claude") for n in range(6)], "capacity": 6},
+])
+def test_every_pipeline_card_line_is_exactly_as_wide_as_the_card(
+        width, changes):
+    lines = render.pipeline_card(view(**changes), width)
+    assert len(lines) == render.CARD_HEIGHT
+    assert {len(text(line)) for line in lines} == {width}
+
+
+def test_an_idle_worker_says_idle_and_for_how_long():
+    idle = busy("worker-2", None, "", 300, "")
+    lines = render.pipeline_card(view(workers=[
+        view().workers[0], idle]), 50)
+    assert text(lines[2]).startswith("│ worker-2 idle 5m")
+
+
+def test_more_workers_than_lines_end_in_a_count():
+    workers = [busy(f"worker-{n}", "review", "x#1", 60, "codex")
+               for n in range(5)]
+    lines = render.pipeline_card(view(workers=workers, capacity=5), 50)
+    shown = [text(line)[2:10] for line in lines[1:4]]
+    assert shown == ["worker-0", "worker-1", "+3 more "]
+
+
+def test_the_border_follows_the_state():
+    edges = {level: render.pipeline_card(view(level=level), 50)[0][0][1]
+             for level in ("ok", "attention", "stuck")}
+    assert edges == {"ok": "border", "attention": "yellow", "stuck": "red"}
+
+
+def test_an_unreachable_dispatcher_is_dim_and_says_why():
+    lines = render.pipeline_card(pipeline.unreachable("timed out"), 50)
+    assert lines[0][0][1] == "dim"
+    assert text(lines[1]) == "│ unreachable: timed out" + " " * 25 + "│"
+    assert styles_of(lines[1], " unreachable") == ["yellow"]
+    assert all(text(line).strip("│ ") == "" for line in lines[2:-1])
+
+
+def test_before_the_first_read_the_card_says_polling():
+    lines = render.pipeline_card(None, 50)
+    assert text(lines[1]).startswith("│ polling...")
+
+
+def test_the_verdict_and_counters_take_their_colour():
+    stuck = render.pipeline_card(view(level="stuck", verdict="✗ stalled",
+                                      cards=2), 50)
+    assert styles_of(stuck[5], " ✗ stalled") == ["red"]
+    assert styles_of(stuck[4], "cards 2") == ["yellow"]
+    assert styles_of(stuck[4], "CI 2/2") == ["yellow"]  # full, work waits
+    ok = render.pipeline_card(view(level="ok", verdict="✓ moving", failed=0,
+                                   waiting=0), 50)
+    assert styles_of(ok[5], " ✓ moving") == ["green"]
+    assert styles_of(ok[4], "failed 0") == ["label"]
+    assert styles_of(ok[4], "CI 2/2") == ["label"]
+
+
+def test_a_single_worker_is_not_pluralised():
+    lines = render.pipeline_card(view(capacity=1), 50)
+    assert " 1 worker ─" in text(lines[0])
+
+
+@pytest.mark.parametrize("seconds, want", [
+    (None, "?"), (0, "0s"), (59, "59s"), (60, "1m"), (3599, "59m"),
+    (3600, "1h00m"), (11100, "3h05m"), (86400, "1d"), (200000, "2d")])
+def test_age_text_is_short(seconds, want):
+    assert render.age_text(seconds) == want

@@ -282,3 +282,63 @@ def test_the_poller_reports_when_its_latest_poll_began(monkeypatch):
     with pytest.raises(Halt):
         poller.loop()
     assert before <= poller.view()[4] <= time.monotonic()
+
+
+def test_pipeline_url_prefers_the_flag_then_the_config(monkeypatch, tmp_path):
+    command = load_command()
+    (tmp_path / "config.toml").write_text(
+        'pipeline_url = "http://cfg/status"\n')
+    monkeypatch.setattr(command.herdr, "config_dir", lambda _id: tmp_path)
+    assert command.pipeline_url(None) == ("http://cfg/status", None)
+    assert command.pipeline_url("http://flag/status") == (
+        "http://flag/status", None)
+    assert command.pipeline_url("") == ("", None)  # --pipeline '' turns it off
+    url, note = command.pipeline_url("file:///etc/passwd")
+    assert url == "" and "--pipeline" in note
+
+
+def test_no_pipeline_is_configured_by_default(monkeypatch, tmp_path):
+    command = load_command()
+    monkeypatch.setattr(command.herdr, "config_dir", lambda _id: tmp_path)
+    assert command.pipeline_url(None) == ("", None)
+
+
+def test_the_poller_reads_the_pipeline_only_when_given_a_url(monkeypatch):
+    command = load_command()
+    monkeypatch.setattr(command.threading, "Thread", lambda **kw: type(
+        "NoThread", (), {"start": lambda self: None})())
+    monkeypatch.setattr(command.pipeline.threading, "Thread",
+                        command.threading.Thread)
+    assert command.Poller(60).pipeline() is None
+    assert command.Poller(60).watcher is None
+    poller = command.Poller(60, "http://x/status")
+    assert poller.watcher is not None and poller.pipeline() is None
+    poller.refresh()  # wakes both loops without error
+
+
+@pytest.mark.filterwarnings("ignore:.*multi-threaded:DeprecationWarning")
+def test_the_dashboard_draws_the_pipeline_card_next_to_the_machines(hosts):
+    from tests.test_pipeline import Dispatcher, status
+    env = hosts[0]
+    server = Dispatcher(body=json.dumps(status()).encode())
+    try:
+        screen = Screen(env, "--pipeline", server.url)
+        assert screen.wait_for("3PLAddons#630")
+        assert screen.wait_for("last lease")
+        assert b"MBP" in screen.seen  # the machine cards are still there
+        assert screen.quit() == 0
+    finally:
+        server.close()
+
+
+def test_the_dashboard_says_unreachable_when_the_dispatcher_is_down(hosts):
+    screen = Screen(hosts[0], "--pipeline", "http://127.0.0.1:1/status")
+    assert screen.wait_for("unreachable")
+    assert screen.quit() == 0
+
+
+def test_without_a_pipeline_url_there_is_no_pipeline_card(hosts, tmp_path):
+    screen = Screen(hosts[0])
+    assert screen.wait_for("MBP")
+    assert b"pipeline" not in screen.seen
+    assert screen.quit() == 0

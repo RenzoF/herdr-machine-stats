@@ -2,6 +2,7 @@
 """Live stats for this machine and every machine Herdr has saved.
 
 machine-stats [--interval SECONDS] [--once] [--deploy MODE]
+              [--pipeline URL]
 
 One card per machine: CPU, memory and disk gauges, a CPU history
 sparkline, load, Herdr agents by status, and whether this plugin is
@@ -10,7 +11,8 @@ btop on the selected machine, d deploys this plugin to the selected
 machine (deploy = "ask"), r refreshes now, q quits. --once prints a plain
 table and exits. Reads are read-only; the only thing ever installed on
 another machine is this plugin, by a deploy you turned on (--deploy or
-config.toml; the default is off).
+config.toml; the default is off). With a dispatcher URL (--pipeline or
+pipeline_url in config.toml) one more read-only card shows that pipeline.
 """
 import argparse
 import curses
@@ -23,7 +25,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from statslib import (  # noqa: E402
-    PLUGIN_ID, collect, config, deploy, herdr, local_version, render)
+    PLUGIN_ID, collect, config, deploy, herdr, local_version, pipeline,
+    render)
 
 ENTER_KEYS = (10, 13, curses.KEY_ENTER)
 # Style name -> (256-colour foreground, 8-colour fallback, extra attribute).
@@ -59,11 +62,28 @@ def deploy_mode(override):
         return "off", f"no plugin config dir ({exc}); deploy is off"
 
 
+def pipeline_url(override):
+    """The dispatcher URL for this run ("" for none), and a note."""
+    if override is not None:
+        if override and not pipeline.valid_url(override):
+            return "", f"--pipeline {override!r} is not an http(s) URL"
+        return override, None
+    try:
+        return config.load_pipeline_url(herdr.config_dir(PLUGIN_ID))
+    except herdr.HerdrError:
+        return "", None  # deploy_mode already says there is no config dir
+
+
+def join_notes(*notes):
+    return "; ".join(n for n in notes if n) or None
+
+
 class Poller:
     """Polls every machine in the background; the view never blocks."""
 
-    def __init__(self, interval):
+    def __init__(self, interval, url=""):
         self.interval = interval
+        self.watcher = pipeline.Watcher(url, interval) if url else None
         self.lock = threading.Lock()
         self.wake = threading.Event()
         self.history = render.History()
@@ -91,8 +111,15 @@ class Poller:
             return (self.rows, self.targets, self.note, self.updated,
                     self.polled)
 
+    def pipeline(self):
+        """The latest pipeline.View, None before the first read or when
+        no dispatcher is configured."""
+        return self.watcher.view() if self.watcher else None
+
     def refresh(self):
         self.wake.set()
+        if self.watcher:
+            self.watcher.refresh()
 
 
 def start_colors():
@@ -149,13 +176,16 @@ def draw(screen, styles, interval, poller, view, selected, notes=None,
     if not rows:
         screen.refresh()
         return
-    columns, card_width = render.grid(len(rows), width)
+    extra = poller.watcher is not None
+    columns, card_width = render.grid(len(rows) + extra, width)
     visible = max(1, (height - 2) // render.CARD_HEIGHT)
     first = max(0, selected // columns - visible + 1) * columns
     with poller.lock:
         cards = [render.card(row, poller.history, card_width, i == selected,
                              note=notes[i] if notes else None)
                  for i, row in enumerate(rows)]
+        if extra:
+            cards.append(render.pipeline_card(poller.pipeline(), card_width))
     for i, lines in enumerate(cards[first:first + visible * columns]):
         top = 1 + (i // columns) * render.CARD_HEIGHT
         left = (i % columns) * card_width
@@ -167,10 +197,10 @@ def draw(screen, styles, interval, poller, view, selected, notes=None,
     screen.refresh()
 
 
-def dashboard(screen, interval, mode, mode_note):
+def dashboard(screen, interval, mode, mode_note, url=""):
     styles = start_colors()
     screen.timeout(250)
-    poller = Poller(interval)
+    poller = Poller(interval, url)
     deployer = deploy.Deployer()
     version = local_version()
     selected, attempted = 0, set()
@@ -197,7 +227,8 @@ def dashboard(screen, interval, mode, mode_note):
             if key == ord("y"):
                 start_deploys(deployer, here, [(label, target)])
             continue
-        columns = render.grid(max(len(rows), 1), screen.getmaxyx()[1])[0]
+        columns = render.grid(max(len(rows), 1) + bool(url),
+                              screen.getmaxyx()[1])[0]
         moves = {curses.KEY_RIGHT: 1, ord("l"): 1, curses.KEY_LEFT: -1,
                  ord("h"): -1, curses.KEY_DOWN: columns, ord("j"): columns,
                  curses.KEY_UP: -columns, ord("k"): -columns}
@@ -269,6 +300,10 @@ def main(argv=None):
                         help="print the table once and exit")
     parser.add_argument("--deploy", choices=config.MODES,
                         help="deploy mode for this run (default: config)")
+    parser.add_argument("--pipeline", metavar="URL",
+                        help="the dispatcher's /status, for the pipeline "
+                        "card (default: pipeline_url in config; '' for "
+                        "none)")
     args = parser.parse_args(argv)
     if args.interval < 1:
         parser.error("--interval must be at least 1 second")
@@ -281,7 +316,9 @@ def main(argv=None):
             print(line)
         return 0
     mode, mode_note = deploy_mode(args.deploy)
-    curses.wrapper(dashboard, args.interval, mode, mode_note)
+    url, url_note = pipeline_url(args.pipeline)
+    curses.wrapper(dashboard, args.interval, mode,
+                   join_notes(mode_note, url_note), url)
     return 0
 
 
