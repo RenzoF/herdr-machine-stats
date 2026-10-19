@@ -323,7 +323,7 @@ def test_the_dashboard_draws_the_pipeline_card_next_to_the_machines(hosts):
     server = Dispatcher(body=json.dumps(status()).encode())
     try:
         screen = Screen(env, "--pipeline", server.url)
-        assert screen.wait_for("3PLAddons#630")
+        assert screen.wait_for("shop#630")
         assert screen.wait_for("last lease")
         assert b"MBP" in screen.seen  # the machine cards are still there
         assert screen.quit() == 0

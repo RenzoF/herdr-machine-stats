@@ -190,9 +190,9 @@ def busy(name, stage, ref, age, harness):
 def view(**changes):
     base = dict(
         error=None, capacity=2,
-        workers=[busy("worker-1", "implement", "3PLAddons#630", 720,
+        workers=[busy("worker-1", "implement", "shop#630", 720,
                       "claude"),
-                 busy("worker-2", "review", "rfpit-ops#194", 240,
+                 busy("worker-2", "review", "billing#194", 240,
                       "codex")],
         ci=(2, 2), waiting=13, failed=1, cards=0, last_lease=240,
         level="attention", verdict="! 1 job failed")
@@ -204,8 +204,8 @@ def test_the_pipeline_card_shows_each_worker_the_counters_and_the_verdict():
     lines = render.pipeline_card(view(), 50)
     assert [text(line) for line in lines] == [
         "╭─ pipeline ───────────────────────── 2 workers ─╮",
-        "│ worker-1 implement 3PLAddons#630  12m claude   │",
-        "│ worker-2 review    rfpit-ops#194   4m codex    │",
+        "│ worker-1 implement shop#630     12m claude     │",
+        "│ worker-2 review    billing#194   4m codex      │",
         "│                                                │",
         "│ CI 2/2  waiting 13  failed 1  cards 0          │",
         "│ ! 1 job failed  last lease 4m ago              │",

@@ -40,9 +40,9 @@ def test_the_pipeline_url_defaults_to_none(tmp_path):
 
 def test_the_pipeline_url_is_read(tmp_path):
     (tmp_path / "config.toml").write_text(
-        'pipeline_url = "http://10.0.0.1:8787/status"\n')
+        'pipeline_url = "http://dispatcher.example:8787/status"\n')
     assert config.load_pipeline_url(tmp_path) == (
-        "http://10.0.0.1:8787/status", None)
+        "http://dispatcher.example:8787/status", None)
 
 
 @pytest.mark.parametrize("value", ['"file:///etc/passwd"', '"nope"', "3"])

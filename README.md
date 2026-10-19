@@ -106,7 +106,7 @@ other plugin, file or setting is touched on the other machines.
 ## Pipeline card
 
 An optional extra card shows an
-rwb-dispatcher pipeline: what each
+job-dispatcher pipeline: what each
 worker is doing, whether work is moving, and whether anything needs you.
 It reads the dispatcher's `/status` (JSON over HTTP) and nothing else; no
 key acts on the pipeline and no worker is contacted. It is off by default.
@@ -114,13 +114,13 @@ Set the URL in `config.toml` (or pass `--pipeline URL`; `--pipeline ''`
 turns it off for one run):
 
 ```toml
-pipeline_url = "http://10.10.10.231:8787/status"   # default "": no card
+pipeline_url = "http://dispatcher.example:8787/status"   # default "": no card
 ```
 
 ```
 ╭─ pipeline ───────────────────────── 2 workers ─╮
-│ worker-1 implement 3PLAddons#630  12m claude   │
-│ worker-2 review    rfpit-ops#194   4m codex    │
+│ worker-1 implement shop#630     12m claude     │
+│ worker-2 review    billing#194   4m codex      │
 │                                                │
 │ CI 2/2  waiting 13  failed 1  cards 0          │
 │ ! 1 job failed  last lease 4m ago              │
@@ -129,8 +129,10 @@ pipeline_url = "http://10.10.10.231:8787/status"   # default "": no card
 
 - **Workers**: stage, repository#issue, how long the lease has run and the
   harness (`claude`, `codex`); a free worker says `idle` and for how long.
-- **Counters**: CI slots in use, issues waiting to start, failed jobs and
-  cards waiting on a person (all repositories).
+- **Counters**: CI slots in use, issues waiting to start, jobs that failed
+  in the last 24 hours and cards waiting on a person (all repositories).
+  A job's failure time is its `updated_at` if `/status` gives one;
+  otherwise it counts from when the dashboard first saw it fail.
 - **Borders**: red is stuck (workers idle with work waiting, a repository's
   lane gave up, the dispatcher not ok), yellow needs a person (draining, a
   held repository, cards, a failed job, an account needing attention),
@@ -138,7 +140,7 @@ pipeline_url = "http://10.10.10.231:8787/status"   # default "": no card
   dispatcher did not answer within 3 seconds (for example from a machine
   that cannot reach it); that is not an alert.
 - The card is not selectable, and only `http://` and `https://` URLs are
-  used. It is polled in the background at the same interval as the
+  used. The request ignores `http_proxy` and `https_proxy`. It is polled in the background at the same interval as the
   machines.
 
 ## Requirements

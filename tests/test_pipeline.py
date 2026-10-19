@@ -3,7 +3,7 @@
 import json
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -18,7 +18,7 @@ def lease(worker, job, created="2026-10-19T13:48:00Z", account="claude:p"):
             "account": account, "created_at": created}
 
 
-def job(ident, issue, stage, slug="Renzo/3PLAddons", state="leased",
+def job(ident, issue, stage, slug="Acme/shop", state="leased",
         worker=""):
     return {"id": ident, "issue": issue, "stage": stage, "state": state,
             "worker": worker, "slug": slug, "name": None}
@@ -30,27 +30,27 @@ def status(**changes):
         "ok": True, "held": False, "capacity": 2, "draining": False,
         "running": 3,
         "leases": [
-            lease("rwb-worker-1", "J1"),
-            lease("rwb-worker-2", "J2", "2026-10-19T13:56:00Z",
+            lease("acme-worker-1", "J1"),
+            lease("acme-worker-2", "J2", "2026-10-19T13:56:00Z",
                   "codex:proxy")],
         "jobs": [
-            job("J1", 630, "implement", worker="rwb-worker-1"),
-            job("J2", 194, "review", "Renzo/rfpit-ops",
-                worker="rwb-worker-2"),
+            job("J1", 630, "implement", worker="acme-worker-1"),
+            job("J2", 194, "review", "Acme/billing",
+                worker="acme-worker-2"),
             job("J3", 504, "ci")],
         "cards": [], "usage_attention": [],
         "repos": {
-            "Renzo/3PLAddons": {"alias": "r3pladdons", "held": False,
-                                "hold_reason": "", "cards": [],
-                                "crashed": "", "gave_up": False},
-            "Renzo/rfpit-ops": {"alias": "rfpit-ops", "held": False,
-                                "hold_reason": "", "cards": [],
-                                "crashed": "", "gave_up": False}},
+            "Acme/shop": {"alias": "shop", "held": False,
+                          "hold_reason": "", "cards": [],
+                          "crashed": "", "gave_up": False},
+            "Acme/billing": {"alias": "billing", "held": False,
+                             "hold_reason": "", "cards": [],
+                             "crashed": "", "gave_up": False}},
         "governor": {"ci_max_parallel": 2, "ci_in_use": 1},
         "stall": {
             "condition": False, "active": False, "idle_workers": [],
             "last_lease_at": "2026-10-19T13:56:00Z",
-            "repos": {"Renzo/3PLAddons": {
+            "repos": {"Acme/shop": {
                 "planned": list(range(13)), "scored": [641, 642]}}},
     }
     base.update(changes)
@@ -61,16 +61,16 @@ def test_busy_workers_name_their_stage_issue_age_and_harness():
     view = pipeline.summarize(status(), NOW)
     assert view.error is None and view.capacity == 2
     assert view.workers == [
-        pipeline.Worker("worker-1", "implement", "3PLAddons#630", 720,
+        pipeline.Worker("worker-1", "implement", "shop#630", 720,
                         "claude"),
-        pipeline.Worker("worker-2", "review", "rfpit-ops#194", 240,
+        pipeline.Worker("worker-2", "review", "billing#194", 240,
                         "codex")]
 
 
 def test_the_counters_come_from_the_governor_stall_jobs_and_every_repo():
     s = status()
     s["jobs"].append(job("J4", 201, "verify", state="failed"))
-    s["repos"]["Renzo/rfpit-ops"]["cards"] = [{"id": 1}, {"id": 2}]
+    s["repos"]["Acme/billing"]["cards"] = [{"id": 1}, {"id": 2}]
     view = pipeline.summarize(s, NOW)
     assert view.ci == (1, 2)
     assert view.waiting == 15  # 13 planned and 2 scored
@@ -85,8 +85,8 @@ def test_a_moving_pipeline_is_ok():
 
 
 def test_idle_workers_come_from_the_stall_report():
-    s = status(leases=[lease("rwb-worker-1", "J1")])
-    s["stall"]["idle_workers"] = [{"worker": "rwb-worker-2",
+    s = status(leases=[lease("acme-worker-1", "J1")])
+    s["stall"]["idle_workers"] = [{"worker": "acme-worker-2",
                                    "since": "2026-10-19T13:55:00Z",
                                    "long": False}]
     view = pipeline.summarize(s, NOW)
@@ -108,9 +108,9 @@ def test_nothing_running_and_nothing_waiting_is_idle_and_ok():
 def test_a_stalled_pipeline_is_stuck_and_says_how_many_workers_idle():
     s = status(leases=[], jobs=[])
     s["stall"].update(condition=True, active=True, idle_workers=[
-        {"worker": "rwb-worker-1", "since": "2026-10-19T13:00:00Z",
+        {"worker": "acme-worker-1", "since": "2026-10-19T13:00:00Z",
          "long": True},
-        {"worker": "rwb-worker-2", "since": "2026-10-19T13:00:00Z",
+        {"worker": "acme-worker-2", "since": "2026-10-19T13:00:00Z",
          "long": True}])
     view = pipeline.summarize(s, NOW)
     assert view.level == "stuck"
@@ -139,28 +139,28 @@ def test_draining_names_the_reason():
 
 def test_a_held_repository_names_itself_and_the_reason():
     s = status()
-    s["repos"]["Renzo/rfpit-ops"].update(held=True, hold_reason="tamper")
+    s["repos"]["Acme/billing"].update(held=True, hold_reason="tamper")
     view = pipeline.summarize(s, NOW)
-    assert view.verdict == "! rfpit-ops held: tamper"
+    assert view.verdict == "! billing held: tamper"
 
 
 def test_cards_waiting_on_a_person_need_attention():
     s = status()
-    s["repos"]["Renzo/3PLAddons"]["cards"] = [{"id": 1}]
+    s["repos"]["Acme/shop"]["cards"] = [{"id": 1}]
     assert pipeline.summarize(s, NOW).verdict == "! 1 card waits on you"
-    s["repos"]["Renzo/3PLAddons"]["cards"] = [{"id": 1}, {"id": 2}]
+    s["repos"]["Acme/shop"]["cards"] = [{"id": 1}, {"id": 2}]
     assert pipeline.summarize(s, NOW).verdict == "! 2 cards wait on you"
 
 
 def test_usage_attention_needs_attention():
-    s = status(usage_attention=[["rwb-worker-1", "a@b", "expired"]])
+    s = status(usage_attention=[["acme-worker-1", "a@b", "expired"]])
     assert pipeline.summarize(s, NOW).verdict == "! account needs attention"
 
 
 def test_a_lane_that_gave_up_or_a_dispatcher_not_ok_is_stuck():
     s = status()
-    s["repos"]["Renzo/rfpit-ops"]["gave_up"] = True
-    assert pipeline.summarize(s, NOW).verdict == "✗ rfpit-ops gave up"
+    s["repos"]["Acme/billing"]["gave_up"] = True
+    assert pipeline.summarize(s, NOW).verdict == "✗ billing gave up"
     assert pipeline.summarize(status(ok=False), NOW).level == "stuck"
 
 
@@ -194,7 +194,8 @@ def test_seconds_since_reads_iso_stamps(stamp, want):
 
 
 @pytest.mark.parametrize("url, ok", [
-    ("http://10.0.0.1:8787/status", True), ("https://x/status", True),
+    ("http://dispatcher.example:8787/status", True),
+    ("https://x/status", True),
     ("file:///etc/passwd", False), ("ftp://x/", False), ("x", False),
     ("", False), (None, False), ("http:/x", False)])
 def test_only_http_urls_are_accepted(url, ok):
@@ -280,7 +281,7 @@ def test_a_url_that_is_not_http_is_never_opened():
 def test_the_watcher_keeps_the_latest_view_and_refreshes_on_request():
     seen = []
 
-    def reader(url):
+    def reader(url, failures):
         seen.append(url)
         return pipeline.unreachable(f"read {len(seen)}")
     watcher = pipeline.Watcher("http://x/status", 60, reader)
@@ -292,3 +293,78 @@ def test_the_watcher_keeps_the_latest_view_and_refreshes_on_request():
     while len(seen) < 2 and time.monotonic() < deadline:
         time.sleep(0.01)
     assert seen == ["http://x/status"] * 2
+
+
+def failed_job(ident="J9", **extra):
+    return {**job(ident, 201, "verify", state="failed"), **extra}
+
+
+def with_failed(*jobs):
+    s = status()
+    s["jobs"].extend(jobs)
+    return s
+
+
+@pytest.mark.parametrize("stamp, counted", [
+    ("2026-10-19T13:00:00Z", True),   # an hour ago
+    ("2026-10-18T14:00:01Z", True),   # a second inside the window
+    ("2026-10-18T14:00:00Z", False),  # exactly 24 h ago: out
+    ("2026-10-01T09:00:00Z", False),  # a stale failure
+])
+def test_a_failed_job_counts_only_for_24_hours_by_its_updated_at(
+        stamp, counted):
+    s = with_failed(failed_job(updated_at=stamp))
+    view = pipeline.summarize(s, NOW)
+    assert view.failed == int(counted)
+    assert view.level == ("attention" if counted else "ok")
+
+
+def test_a_job_without_a_timestamp_counts_from_when_it_was_first_seen():
+    s = with_failed(failed_job())  # /status today: no timestamp at all
+    seen = {}
+    assert pipeline.summarize(s, NOW, seen).failed == 1
+    assert seen == {"J9": NOW}
+    day = timedelta(hours=24)
+    assert pipeline.summarize(s, NOW + day - timedelta(seconds=1),
+                              seen).failed == 1
+    assert pipeline.summarize(s, NOW + day, seen).failed == 0
+    assert seen == {"J9": NOW}  # still the first sighting
+
+
+def test_a_job_that_leaves_the_failed_list_is_forgotten():
+    seen = {}
+    pipeline.summarize(with_failed(failed_job()), NOW, seen)
+    pipeline.summarize(status(), NOW, seen)
+    assert seen == {}
+
+
+def test_without_a_record_a_job_with_no_timestamp_counts_as_just_seen():
+    assert pipeline.summarize(with_failed(failed_job()), NOW).failed == 1
+
+
+def test_the_timestamp_wins_over_the_first_sighting():
+    seen = {"J9": NOW}
+    s = with_failed(failed_job(updated_at="2026-10-01T09:00:00Z"))
+    assert pipeline.summarize(s, NOW, seen).failed == 0
+
+
+def test_the_watcher_keeps_one_record_for_every_read():
+    records = []
+    watcher = pipeline.Watcher(
+        "http://x/status", 60,
+        lambda url, seen: records.append(seen) or pipeline.unreachable(""))
+    deadline = time.monotonic() + 5
+    while not records and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert records[0] is watcher.seen
+
+
+def test_the_dispatcher_is_read_without_going_through_a_proxy(
+        serve, monkeypatch):
+    server = serve(body=json.dumps(status()).encode())
+    for name in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+        monkeypatch.setenv(name, "http://127.0.0.1:1")  # nothing listens
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    view = pipeline.read(server.url)
+    assert view.error is None and server.paths == ["/status"]

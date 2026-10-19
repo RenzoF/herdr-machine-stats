@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 TIMEOUT = 3  # seconds for the one request
 MAX_BYTES = 4_000_000  # a /status is tens of kilobytes; this is a backstop
+FAILED_WINDOW = 24 * 3600  # a failed job counts for this long
 SCHEMES = ("http", "https")
 
 # One worker line: ``stage`` is None for an idle worker.
@@ -45,8 +46,11 @@ def fetch(url, timeout=TIMEOUT):
     """The parsed ``/status`` at ``url``; PipelineError says why not."""
     if not valid_url(url):
         raise PipelineError("url is not http or https")
+    # The dispatcher is on the local network: never go through a proxy
+    # from http_proxy / https_proxy, which would make it look unreachable.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        with opener.open(url, timeout=timeout) as response:
             body = response.read(MAX_BYTES + 1)
     except urllib.error.HTTPError as exc:
         raise PipelineError(f"HTTP {exc.code}") from None
@@ -88,9 +92,10 @@ def _count(value):
 
 
 def _short(worker):
-    """``rwb-worker-1`` as ``worker-1``."""
+    """``acme-worker-1`` as ``worker-1``: the part from ``worker-``."""
     worker = str(worker or "?")
-    return worker[4:] if worker.startswith("rwb-") else worker
+    start = worker.find("worker-")
+    return worker[start:] if start > 0 else worker
 
 
 def _workers(status, now):
@@ -137,6 +142,30 @@ def _ci(status):
     return None
 
 
+def _failed(status, now, seen):
+    """How many jobs failed in the last ``FAILED_WINDOW`` seconds.
+
+    /status gives a job's ``updated_at`` only if the dispatcher adds it
+    (today a job entry has no timestamp). Without one, the job counts
+    from when this dashboard first saw it failed, kept in ``seen``
+    (job id -> datetime, which the caller keeps between reads). A job that
+    left the failed list is forgotten.
+    """
+    failed = [j for j in _dicts(status.get("jobs"))
+              if j.get("state") == "failed"]
+    if seen is not None:
+        for ident in set(seen) - {j.get("id") for j in failed}:
+            del seen[ident]
+    count = 0
+    for j in failed:
+        age = seconds_since(j.get("updated_at"), now)
+        if age is None:
+            first = now if seen is None else seen.setdefault(j.get("id"), now)
+            age = max(0, int((now - first).total_seconds()))
+        count += age < FAILED_WINDOW
+    return count
+
+
 def _plural(n, one, many):
     return f"{n} {one if n == 1 else many}"
 
@@ -177,8 +206,9 @@ def _problems(status, repos, cards, failed):
     return stuck, attention
 
 
-def summarize(status, now=None):
-    """A View of a parsed ``/status``."""
+def summarize(status, now=None, seen=None):
+    """A View of a parsed ``/status``; ``seen`` is the first-seen record
+    of failed jobs (see ``_failed``)."""
     now = now or datetime.now(timezone.utc)
     repos = [(str(r.get("alias") or slug).rsplit("/", 1)[-1], r)
              for slug, r in sorted((status.get("repos") or {}).items())
@@ -186,8 +216,7 @@ def summarize(status, now=None):
         if isinstance(status.get("repos"), dict) else []
     # The top-level "cards" is the first repository's; count them all.
     cards = sum(_count(r.get("cards")) for _alias, r in repos)
-    failed = sum(j.get("state") == "failed"
-                 for j in _dicts(status.get("jobs")))
+    failed = _failed(status, now, seen)
     workers = _workers(status, now)
     stall = status.get("stall")
     stuck, attention = _problems(status, repos, cards, failed)
@@ -208,10 +237,10 @@ def summarize(status, now=None):
         if isinstance(stall, dict) else None, level, verdict)
 
 
-def read(url):
+def read(url, seen=None):
     """A View of the dispatcher at ``url``, or an unreachable one."""
     try:
-        return summarize(fetch(url))
+        return summarize(fetch(url), seen=seen)
     except PipelineError as exc:
         return unreachable(str(exc))
 
@@ -221,6 +250,7 @@ class Watcher:
 
     def __init__(self, url, interval, reader=read):
         self.url, self.interval, self.reader = url, interval, reader
+        self.seen = {}  # failed job id -> when this watcher first saw it
         self.lock = threading.Lock()
         self.wake = threading.Event()
         self.latest = None
@@ -230,7 +260,7 @@ class Watcher:
     def loop(self):
         while True:
             began = time.monotonic()
-            view = self.reader(self.url)
+            view = self.reader(self.url, self.seen)
             with self.lock:
                 self.latest, self.polled = view, began
             self.wake.wait(self.interval)

@@ -1,7 +1,7 @@
 # Pipeline card
 
 One extra, read-only card on the dashboard showing whether the
-rwb-dispatcher pipeline is working through issues. Nothing is added to
+job-dispatcher pipeline is working through issues. Nothing is added to
 `herdr machine list`, nothing is run on the workers, and no key acts on
 the pipeline.
 
@@ -13,14 +13,16 @@ machine polls and the other way round. Standard library (`urllib`) only,
 3 second timeout, one request per poll interval.
 
 Only `http://` and `https://` URLs are accepted; anything else is a
-config note and no card.
+config note and no card. The request ignores `http_proxy` / `https_proxy`
+(a `ProxyHandler({})` opener): the dispatcher is on the local network, and
+a desktop proxy would make it look unreachable.
 
 ## Configuration
 
 `config.toml` in the plugin's config directory:
 
 ```toml
-pipeline_url = "http://10.10.10.231:8787/status"   # default "": no card
+pipeline_url = "http://dispatcher.example:8787/status"   # default "": no card
 ```
 
 `--pipeline URL` overrides it for one run. Empty (the default), a missing
@@ -34,13 +36,13 @@ machine cards. It is not selectable: arrows, Enter and `d` act on
 machines only.
 
 ```
-╭─ pipeline ──────────────────────── 2 workers ─╮
-│ worker-1 implement 3PLAddons#630   12m claude │
-│ worker-2 review    rfpit-ops#194    4m codex  │
-│                                               │
-│ CI 1/2  waiting 15  failed 1  cards 2         │
-│ last lease 4m ago  ✓ moving                   │
-╰───────────────────────────────────────────────╯
+╭─ pipeline ───────────────────────── 2 workers ─╮
+│ worker-1 implement shop#630     12m claude     │
+│ worker-2 review    billing#194   4m codex      │
+│                                                │
+│ CI 2/2  waiting 13  failed 1  cards 0          │
+│ ! 1 job failed  last lease 4m ago              │
+╰────────────────────────────────────────────────╯
 ```
 
 Body, five lines:
@@ -61,7 +63,7 @@ Body, five lines:
 | harness | `account` up to the first `:` (`claude:proxy` shows `claude`) |
 | CI | `governor.ci_in_use`, `governor.ci_max_parallel` |
 | waiting | sum over `stall.repos[*]` of `len(planned) + len(scored)`: the dispatcher's own "N issues wait". Repos that are drained, held or without eligible work are not in it |
-| failed | `jobs[]` with `state == "failed"` |
+| failed | `jobs[]` with `state == "failed"` that failed in the last 24 hours (below) |
 | cards | sum over `repos[*].cards`. The top-level `cards` is the first repository's only |
 | last lease | `stall.last_lease_at` |
 | usage attention | `usage_attention[]` |
@@ -70,6 +72,17 @@ Body, five lines:
 | stalled | `stall.condition` (workers idle past `stall_after_min` while work waits, beyond the review reserve), `stall.active` (the episode) |
 | not ok | `ok` is false (no vault token sink, no lock or no worker registry) |
 | lane trouble | `repos[*].gave_up`, `repos[*].crashed` |
+
+**When a job failed.** A job entry in `/status` has `id`, `issue`,
+`stage`, `state`, `worker`, `slug` and `name`: no timestamp. The
+dispatcher's job row has `updated_at`; if an entry carries that field, the
+card uses it (the job counts while `now - updated_at` is under 24 hours).
+Without it, the card uses the time this dashboard first saw that job id
+failed, kept in memory (not on disk) until the job leaves the failed list.
+So a stale failure that was already there when the dashboard started
+counts for 24 hours after the start, then drops off; no recent failure is
+ever hidden. Exposing `updated_at` on job entries in `/status` would make
+this exact.
 
 A job in a `ci` stage has no worker (it runs on the CI host); it is
 counted in the CI figure, not shown as a worker line.
