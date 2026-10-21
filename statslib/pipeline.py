@@ -113,9 +113,13 @@ def _workers(status, now):
             account.split(":", 1)[0]))
     busy.sort(key=lambda w: w.name)
     stall = status.get("stall")
+    # The stall report is from the dispatcher's last check, which can
+    # predate a lease: a worker holding a lease is busy, not idle.
+    working = {w.name for w in busy}
     idle = [Worker(_short(w.get("worker")), None, "",
                    seconds_since(w.get("since"), now), "")
-            for w in _dicts(stall.get("idle_workers"))] \
+            for w in _dicts(stall.get("idle_workers"))
+            if _short(w.get("worker")) not in working] \
         if isinstance(stall, dict) else []
     idle.sort(key=lambda w: w.name)
     capacity = status.get("capacity")

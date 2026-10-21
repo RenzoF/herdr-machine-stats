@@ -213,13 +213,35 @@ def age_text(seconds):
     return f"{seconds // 86400}d"
 
 
+def _cut_ref(ref, room):
+    """``ref`` ("repo#12") in ``room`` columns: the repo name gives way
+    and the issue number stays."""
+    if len(ref) <= room:
+        return ref
+    repo, _, issue = ref.rpartition("#")
+    keep = room - len(issue) - 2  # "…#" and the number
+    if not repo or keep < 1:
+        return ref[:max(room, 0)]
+    return f"{repo[:keep]}…#{issue}"
+
+
 def _worker_lines(workers, inner):
     shown = workers
     if len(workers) > WORKER_LINES:
         shown = workers[:WORKER_LINES - 1]
     name = max((len(w.name) for w in shown), default=0)
     stage = max((len(w.stage or "") for w in shown), default=0)
-    ref = max((len(w.ref) for w in shown), default=0)
+    harness = max((len(w.harness) for w in shown), default=0)
+    # " name stage ref age harness": what is left after the other columns.
+    fixed = 1 + name + 1 + stage + 1 + 1 + 4
+    # On a narrow card the harness is the first thing to go: the repo
+    # and issue matter more.
+    show_harness = bool(harness) and inner - fixed - (1 + harness) >= 12
+    if show_harness:
+        fixed += 1 + harness
+    room = max(6, inner - fixed)
+    refs = {w.name: _cut_ref(w.ref, room) for w in shown}
+    ref = max((len(r) for r in refs.values()), default=0)
     lines = []
     for w in shown:
         if w.stage is None:
@@ -230,9 +252,9 @@ def _worker_lines(workers, inner):
             continue
         parts = [(f" {w.name:<{name}} ", "label"),
                  (f"{w.stage:<{stage}} ", "text"),
-                 (f"{w.ref:<{ref}} ", "title"),
+                 (f"{refs[w.name]:<{ref}} ", "title"),
                  (f"{age_text(w.age):>4}", "text")]
-        if w.harness:
+        if w.harness and show_harness:
             parts.append((f" {w.harness}", "dim"))
         lines.append(_fit(parts, inner))
     if len(workers) > WORKER_LINES:

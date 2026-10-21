@@ -284,3 +284,33 @@ def test_a_single_worker_is_not_pluralised():
     (3600, "1h00m"), (11100, "3h05m"), (86400, "1d"), (200000, "2d")])
 def test_age_text_is_short(seconds, want):
     assert render.age_text(seconds) == want
+
+
+@pytest.mark.parametrize("width", [30, 40, 50, 56, 80])
+def test_a_long_repo_name_gives_way_so_age_and_harness_still_fit(width):
+    workers = [
+        busy("worker-1", "implement", "customer-context-service#117", 62,
+             "claude"),
+        busy("worker-2", "plan", "command-center#138", 79, "claude")]
+    lines = render.pipeline_card(view(workers=workers), width)
+    first, second = text(lines[1]), text(lines[2])
+    assert len(first) == len(second) == width
+    if width >= 40:
+        assert "#117" in first and "1m" in first
+        assert "#138" in second and "1m" in second
+    if width >= 56:
+        assert "claude" in first and "claude" in second
+    if width == 40:
+        assert "claude" not in first  # no room: the harness gives way
+
+
+@pytest.mark.parametrize("ref, room, want", [
+    ("shop#630", 20, "shop#630"),
+    ("customer-context-service#117", 18, "customer-cont…#117"),
+    ("customer-context-service#117", 8, "c…#117"[:8]),
+    ("x#1", 2, "x#"), ("noissue", 4, "nois")])
+def test_cut_ref_keeps_the_issue_number(ref, room, want):
+    got = render._cut_ref(ref, room)
+    assert len(got) <= room
+    if "…" in want:
+        assert got.endswith("#" + ref.rpartition("#")[2])

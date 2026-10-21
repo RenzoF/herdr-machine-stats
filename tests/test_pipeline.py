@@ -368,3 +368,13 @@ def test_the_dispatcher_is_read_without_going_through_a_proxy(
     monkeypatch.delenv("NO_PROXY", raising=False)
     view = pipeline.read(server.url)
     assert view.error is None and server.paths == ["/status"]
+
+
+def test_a_worker_holding_a_lease_is_not_also_listed_idle():
+    s = status()  # worker-1 and worker-2 both hold leases
+    s["stall"]["idle_workers"] = [{"worker": "acme-worker-1",
+                                   "since": "2026-10-19T13:59:45Z",
+                                   "long": False}]  # a stale report
+    view = pipeline.summarize(s, NOW)
+    assert [w.name for w in view.workers] == ["worker-1", "worker-2"]
+    assert all(w.stage for w in view.workers)
