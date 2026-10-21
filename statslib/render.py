@@ -263,6 +263,40 @@ def _worker_lines(workers, inner):
     return lines + [_fit([], inner)] * (WORKER_LINES - len(lines))
 
 
+def ellipsize(text, room):
+    """``text`` within ``room`` columns, cut between words and ended with
+    one ellipsis; just the ellipsis when not even one word fits."""
+    if len(text) <= room:
+        return text
+    if room < 1:
+        return ""
+    cut = text[:room - 1]
+    if text[room - 1] != " " and " " in cut:  # the cut would split a word
+        cut = cut[:cut.rindex(" ")]
+    elif text[room - 1] != " ":
+        cut = ""
+    return cut.rstrip(" ,;:(") + "…"
+
+
+def _verdict_line(view, inner):
+    """The state, the last lease, then as much of the detail as fits.
+
+    "✓ moving  last lease 4m ago" when all is well; otherwise the mark,
+    the last lease whole and the attention text, which gives way first.
+    """
+    last = ("no lease yet" if view.last_lease is None
+            else f"last lease {age_text(view.last_lease)} ago")
+    style = LEVEL_STYLES[view.level]
+    mark, _, detail = view.verdict.partition(" ")
+    if view.level == "ok":
+        return _fit([(f" {mark} {detail}", style), (f"  {last}", "dim")],
+                    inner)
+    head = [(f" {mark}", style), (f" {last}", "dim")]
+    room = inner - 1 - len(mark) - 1 - len(last) - 2
+    detail = ellipsize(detail, room)
+    return _fit([*head, (f"  {detail}" if detail else "", style)], inner)
+
+
 def _counters(view, inner):
     parts = [(" ", "text")]
     if view.ci is not None:
@@ -304,11 +338,8 @@ def pipeline_card(view, width):
                       (f": {view.error}", "dim")], inner)]
         body += [blank] * (CARD_HEIGHT - 3)
     else:
-        last = ("no lease yet" if view.last_lease is None
-                else f"last lease {age_text(view.last_lease)} ago")
         body = [*_worker_lines(view.workers, inner), _counters(view, inner),
-                _fit([(f" {view.verdict}", LEVEL_STYLES[view.level]),
-                      (f"  {last}", "dim")], inner)]
+                _verdict_line(view, inner)]
     sides = [[("│", edge), *line, ("│", edge)] for line in body]
     bottom = [("╰", edge), ("─" * inner, edge), ("╯", edge)]
     return [top, *sides, bottom]

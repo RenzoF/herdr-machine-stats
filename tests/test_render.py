@@ -208,7 +208,7 @@ def test_the_pipeline_card_shows_each_worker_the_counters_and_the_verdict():
         "│ worker-2 review    billing#194   4m codex      │",
         "│                                                │",
         "│ CI 2/2  waiting 13  failed 1  cards 0          │",
-        "│ ! 1 job failed  last lease 4m ago              │",
+        "│ ! last lease 4m ago  1 job failed              │",
         "╰────────────────────────────────────────────────╯",
     ]
 
@@ -264,12 +264,15 @@ def test_before_the_first_read_the_card_says_polling():
 def test_the_verdict_and_counters_take_their_colour():
     stuck = render.pipeline_card(view(level="stuck", verdict="✗ stalled",
                                       cards=2), 50)
-    assert styles_of(stuck[5], " ✗ stalled") == ["red"]
+    assert styles_of(stuck[5], " ✗") == ["red"]
+    assert styles_of(stuck[5], "  stalled") == ["red"]
+    assert styles_of(stuck[5], " last lease 4m ago") == ["dim"]
     assert styles_of(stuck[4], "cards 2") == ["yellow"]
     assert styles_of(stuck[4], "CI 2/2") == ["yellow"]  # full, work waits
     ok = render.pipeline_card(view(level="ok", verdict="✓ moving", failed=0,
                                    waiting=0), 50)
     assert styles_of(ok[5], " ✓ moving") == ["green"]
+    assert text(ok[5]) == "│ ✓ moving  last lease 4m ago" + " " * 20 + "│"
     assert styles_of(ok[4], "failed 0") == ["label"]
     assert styles_of(ok[4], "CI 2/2") == ["label"]
 
@@ -314,3 +317,65 @@ def test_cut_ref_keeps_the_issue_number(ref, room, want):
     assert len(got) <= room
     if "…" in want:
         assert got.endswith("#" + ref.rpartition("#")[2])
+
+
+@pytest.mark.parametrize("text_, room, want", [
+    ("9 cards wait on you (+1)", 40, "9 cards wait on you (+1)"),
+    ("9 cards wait on you (+1)", 24, "9 cards wait on you (+1)"),
+    ("9 cards wait on you (+1)", 23, "9 cards wait on you…"),
+    ("9 cards wait on you (+1)", 13, "9 cards wait…"),
+    ("9 cards wait on you (+1)", 12, "9 cards…"),   # not "9 cards wa…"
+    ("9 cards wait on you (+1)", 8, "9 cards…"),
+    ("9 cards wait on you (+1)", 7, "9…"),
+    ("alphabetical", 5, "…"),                          # no word fits
+    ("anything", 0, ""),
+])
+def test_ellipsize_cuts_between_words_and_ends_with_one_ellipsis(
+        text_, room, want):
+    got = render.ellipsize(text_, room)
+    assert got == want and len(got) <= room
+    assert got.count("…") <= 1
+
+
+LONG = ("! draining: deploy of the dispatcher, then a long maintenance "
+        "window for the whole fleet (+3)")
+
+
+@pytest.mark.parametrize("width", [40, 44, 50, 60, 80])
+def test_the_verdict_line_keeps_the_lease_whole_and_cuts_between_words(
+        width):
+    lines = render.pipeline_card(
+        view(level="attention", verdict=LONG, last_lease=4 * 60), width)
+    line = text(lines[5])
+    assert len(line) == width
+    assert "! last lease 4m ago" in line  # never cut, at any width
+    shown = line[1:-1].strip()
+    detail = shown.split("  ", 1)[1] if "  " in shown else ""
+    assert detail.startswith("draining")
+    if detail.endswith("…"):
+        before = detail[:-1]
+        assert LONG[2:].startswith(before)          # a prefix of the text
+        assert LONG[2 + len(before)] in " ,:"       # ended on a word edge
+        assert detail.count("…") == 1
+
+
+def test_at_width_40_the_attention_text_gives_way_to_the_lease():
+    lines = render.pipeline_card(
+        view(level="attention", verdict="! 9 cards wait on you (+1)",
+             last_lease=55), 40)
+    assert text(lines[5]) == "│ ! last lease 55s ago  9 cards wait…  │"
+
+
+def test_a_stuck_card_leads_with_the_mark_and_the_lease():
+    lines = render.pipeline_card(
+        view(level="stuck",
+             verdict="✗ stalled: 2 workers idle with work waiting",
+             last_lease=9 * 60), 40)
+    assert text(lines[5]) == "│ ✗ last lease 9m ago  stalled: 2…     │"
+
+
+def test_without_a_lease_the_line_says_so():
+    lines = render.pipeline_card(
+        view(level="attention", verdict="! 1 job failed",
+             last_lease=None), 50)
+    assert "! no lease yet  1 job failed" in text(lines[5])
