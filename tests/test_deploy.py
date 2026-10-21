@@ -334,3 +334,26 @@ def test_a_new_deploy_replaces_a_stale_deployed_result():
     release.set()
     deployer.threads["a"].join(5)
     assert deployer.get("a", polled=11.0) == "failed: no access"
+
+
+def test_commit_lookups_for_several_machines_never_overlap():
+    state = {"now": 0, "most": 0}
+    lock = threading.Lock()
+
+    def slow_git(root, *args):
+        with lock:
+            state["now"] += 1
+            state["most"] = max(state["most"], state["now"])
+        time.sleep(0.05)
+        with lock:
+            state["now"] -= 1
+        return "abc" if args[0] == "rev-parse" else (
+            "" if args[0] == "status" else "origin/main")
+    deployer = deploy.Deployer(run=lambda *a, **k: done(), git=slow_git)
+    local = {"plugin_root": "/x", "source": {"kind": "local"}}
+    for name in "abcd":
+        deployer.start(name, "t" + name, local)
+    for name in "abcd":
+        deployer.threads[name].join(10)
+    assert [deployer.status[n] for n in "abcd"] == ["deployed"] * 4
+    assert state["most"] == 1

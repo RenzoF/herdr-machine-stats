@@ -417,3 +417,18 @@ def test_a_misspelt_exclusion_pauses_auto_deploy_instead_of_deploying(
     time.sleep(2)
     assert installs(remote) == []
     assert screen.quit() == 0
+
+
+def test_the_footer_shows_the_whole_refusal_of_the_selected_card():
+    command = load_command()
+    deployer = deploy.Deployer(run=lambda *a, **k: subprocess.CompletedProcess(
+        [], 0, "", ""), git=lambda *a: (_ for _ in ()).throw(
+        deploy.Refused("git fetch failed: error: cannot lock ref x")))
+    deployer.start("MBP", "ta", {"plugin_root": "/x",
+                                 "source": {"kind": "local"}})
+    deployer.threads["MBP"].join(5)
+    rows = [remote_row({}, "here"), remote_row({}, "MBP")]
+    assert command.deploy_detail(rows, 1, deployer) == (
+        "MBP: refused: git fetch failed: error: cannot lock ref x")
+    assert command.deploy_detail(rows, 0, deployer) is None
+    assert command.deploy_detail([], 0, deployer) is None

@@ -149,6 +149,10 @@ class Deployer:
         self.git = git
         self.clock = clock
         self.lock = threading.Lock()
+        # Auto mode starts several deploys at once; their commit lookups
+        # (a fetch in one checkout) must not run side by side, or git
+        # fails with "cannot lock ref".
+        self.lookup = threading.Lock()
         self.status = {}
         self.finished = {}
         self.threads = {}
@@ -171,7 +175,8 @@ class Deployer:
 
     def _deploy(self, label, target, entry):
         try:
-            commit = source_commit(entry, self.git)
+            with self.lookup:
+                commit = source_commit(entry, self.git)
             done = self.run(install_argv(target, commit), capture_output=True,
                             text=True, timeout=self.timeout,
                             stdin=subprocess.DEVNULL)

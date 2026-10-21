@@ -241,7 +241,7 @@ def dashboard(screen, interval, mode, mode_note, url="", excluded=()):
         if prompt:
             message = f"deploy {version} to {prompt[0]}? y/n"
         draw(screen, styles, interval, poller, view, selected, notes,
-             message)
+             message or deploy_detail(rows, selected, deployer, view[4]))
         key = screen.getch()
         if prompt and key != -1:
             label, target = prompt
@@ -288,6 +288,17 @@ def notes_for(row, is_here, version, deployer, polled=None, excluded=()):
     if row.label in excluded:
         return f"{text} · excluded", "dim"
     return text, style
+
+
+def deploy_detail(rows, selected, deployer, polled=None):
+    """The selected card's full deploy failure or refusal, for the footer
+    (the card's own line is cut to the card's width)."""
+    if not rows:
+        return None
+    status = deployer.get(rows[selected].label, polled)
+    if status and status.startswith(("failed", "refused")):
+        return f"{rows[selected].label}: {status}"
+    return None
 
 
 def ask_deploy(mode, rows, selected, version, excluded=()):
