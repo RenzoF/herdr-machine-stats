@@ -2,6 +2,7 @@
 
     deploy = "off"   # off | ask | auto
     pipeline_url = ""   # the dispatcher's /status; empty: no pipeline card
+    deploy_exclude = ["name"]   # machines (card names) deploy skips
 """
 
 import tomllib
@@ -27,6 +28,29 @@ def load(directory):
         return "off", (f"deploy = {mode!r} is not off, ask or auto; "
                        "deploy is off")
     return mode, None
+
+
+def load_deploy_exclude(directory):
+    """(names, note): the machines deploy must skip.
+
+    A value that is not a list of names returns a note, and the caller
+    turns deploy off: ignoring a broken exclusion would deploy to the
+    very machines it was meant to protect.
+    """
+    path = Path(directory) / "config.toml"
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+    except FileNotFoundError:
+        return (), None
+    except (OSError, tomllib.TOMLDecodeError):
+        return (), None  # load() already says the file is unreadable
+    names = data.get("deploy_exclude", [])
+    if not isinstance(names, list) or not all(
+            isinstance(n, str) and n for n in names):
+        return (), ("deploy_exclude must be a list of machine names; "
+                    "deploy is off")
+    return tuple(names), None
 
 
 def load_pipeline_url(directory):

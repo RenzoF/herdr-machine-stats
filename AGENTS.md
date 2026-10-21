@@ -7,7 +7,7 @@ deploy of itself to those machines.
 - `bin/machine-stats`: curses front end. Run as `python3 bin/machine-stats`.
 - `statslib/collect.py`: the POSIX collector script and polling;
   `render.py`: cards; `deploy.py`: plugin state and installs;
-  `config.py`: the `deploy` and `pipeline_url` settings; `pipeline.py`:
+  `config.py`: the `deploy`, `deploy_exclude` and `pipeline_url` settings; `pipeline.py`:
   the optional pipeline card's `/status` read; `herdr.py`: the only module
   that names the `herdr` CLI.
 - Python 3.11+, standard library only.

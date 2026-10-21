@@ -62,6 +62,19 @@ deploy = "ask"   # off | ask | auto
 - `auto`: deploys to each machine that lacks the plugin or runs an older
   version, once per machine per run of the dashboard, with no key.
 
+To keep deploy away from some machines, list their card names:
+
+```toml
+deploy_exclude = ["lab-box"]   # never deployed to, in any mode
+```
+
+An excluded machine still gets a card; its plugin line ends in
+`· excluded`, and `d` on it says so. The names must match the card names
+exactly. If `deploy_exclude` is not a list of names, deploy is turned off
+for the run (with a note in the footer); if a name matches no machine,
+auto deploy is paused with a note, so a typo never deploys to the machine
+you meant to protect.
+
 `--deploy off|ask|auto` overrides the setting for one run. A missing
 `config.toml` means `off`; an unreadable file or an unknown value also
 falls back to `off`, with a note in the footer.

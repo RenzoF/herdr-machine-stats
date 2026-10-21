@@ -342,3 +342,78 @@ def test_without_a_pipeline_url_there_is_no_pipeline_card(hosts, tmp_path):
     assert screen.wait_for("MBP")
     assert b"pipeline" not in screen.seen
     assert screen.quit() == 0
+
+
+def test_deploy_excluded_turns_deploy_off_when_the_value_is_broken(
+        monkeypatch, tmp_path):
+    command = load_command()
+    monkeypatch.setattr(command.herdr, "config_dir", lambda _id: tmp_path)
+    assert command.deploy_excluded() == ((), None, None)
+    (tmp_path / "config.toml").write_text('deploy_exclude = ["lab"]\n')
+    assert command.deploy_excluded() == (("lab",), None, None)
+    (tmp_path / "config.toml").write_text('deploy_exclude = "lab"\n')
+    names, forced, note = command.deploy_excluded()
+    assert names == () and forced == "off" and "deploy_exclude" in note
+
+
+def test_unknown_excluded_names_are_found_once_there_are_rows():
+    command = load_command()
+    rows = [remote_row({}, "here"), remote_row({}, "MBP")]
+    assert command.unknown_excluded(("MBP", "mbp"), rows) == ["mbp"]
+    assert command.unknown_excluded(("MBP",), rows) == []
+    assert command.unknown_excluded(("MBP",), []) == []  # not polled yet
+
+
+def test_an_excluded_machine_cannot_be_deployed_to_by_key():
+    command = load_command()
+    rows = [remote_row(github(statslib.local_version())),
+            remote_row({}, "lab")]
+    assert "lab is excluded" in command.ask_deploy(
+        "ask", rows, 1, statslib.local_version(), ("lab",))
+    assert command.ask_deploy(
+        "ask", rows, 1, statslib.local_version(), ("other",)) is None
+
+
+def test_an_excluded_machine_says_so_on_its_plugin_line():
+    command = load_command()
+    deployer = deploy.Deployer(run=lambda *a, **k: subprocess.CompletedProcess(
+        [], 0, "", ""))
+    version = statslib.local_version()
+    assert command.notes_for(remote_row({}, "lab"), False, version,
+                             deployer, None, ("lab",)) == (
+        "plugin missing · excluded", "dim")
+    assert command.notes_for(remote_row({}, "lab"), False, version,
+                             deployer, None) == ("plugin missing", "yellow")
+
+
+def test_auto_mode_leaves_an_excluded_machine_alone(hosts, tmp_path):
+    env, _local, remote = hosts
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text('deploy_exclude = ["MBP"]\n')
+    local_shim = tmp_path / "local" / "herdr"
+    local_shim.write_text(local_shim.read_text().replace(
+        'case "$1 $2" in', 'case "$1 $2" in\n  "plugin config-dir") echo '
+        f'"{config_dir}";;', 1))
+    screen = Screen(env, "--deploy", "auto")
+    assert screen.wait_for("excluded")
+    time.sleep(2)
+    assert installs(remote) == []
+    assert screen.quit() == 0
+
+
+def test_a_misspelt_exclusion_pauses_auto_deploy_instead_of_deploying(
+        hosts, tmp_path):
+    env, _local, remote = hosts
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text('deploy_exclude = ["mbp"]\n')
+    local_shim = tmp_path / "local" / "herdr"
+    local_shim.write_text(local_shim.read_text().replace(
+        'case "$1 $2" in', 'case "$1 $2" in\n  "plugin config-dir") echo '
+        f'"{config_dir}";;', 1))
+    screen = Screen(env, "--deploy", "auto")
+    assert screen.wait_for("names no machine")
+    time.sleep(2)
+    assert installs(remote) == []
+    assert screen.quit() == 0

@@ -155,6 +155,15 @@ def test_auto_targets_skips_this_machine_and_machines_already_tried():
         ("a", "ta"), ("b", "tb")]
 
 
+def test_auto_targets_never_picks_an_excluded_machine():
+    rows = [row("here", {}), row("a", {}), row("b", entry("0.1.0")),
+            row("c", {})]
+    targets = [None, "ta", "tb", "tc"]
+    assert deploy.auto_targets(rows, targets, "0.2.0", set(),
+                               excluded=("b", "zzz")) == [
+        ("a", "ta"), ("c", "tc")]
+
+
 def done(code=0, err=""):
     return subprocess.CompletedProcess([], code, "", err)
 

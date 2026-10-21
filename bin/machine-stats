@@ -8,7 +8,8 @@ One card per machine: CPU, memory and disk gauges, a CPU history
 sparkline, load, Herdr agents by status, and whether this plugin is
 installed there. Keys: arrows or h/j/k/l move between cards, Enter opens
 btop on the selected machine, d deploys this plugin to the selected
-machine (deploy = "ask"), r refreshes now, q quits. --once prints a plain
+machine (deploy = "ask"; machines in deploy_exclude are skipped), r
+refreshes now, q quits. --once prints a plain
 table and exits. Reads are read-only; the only thing ever installed on
 another machine is this plugin, by a deploy you turned on (--deploy or
 config.toml; the default is off). With a dispatcher URL (--pipeline or
@@ -60,6 +61,21 @@ def deploy_mode(override):
         return config.load(herdr.config_dir(PLUGIN_ID))
     except herdr.HerdrError as exc:
         return "off", f"no plugin config dir ({exc}); deploy is off"
+
+
+def deploy_excluded():
+    """(machine names deploy skips, mode to use instead or None, note)."""
+    try:
+        names, note = config.load_deploy_exclude(herdr.config_dir(PLUGIN_ID))
+    except herdr.HerdrError:
+        return (), None, None  # deploy_mode already says there is no dir
+    return names, ("off" if note else None), note
+
+
+def unknown_excluded(excluded, rows):
+    """Excluded names that match no machine, once there are rows."""
+    labels = {row.label for row in rows}
+    return sorted(set(excluded) - labels) if rows else []
 
 
 def pipeline_url(override):
@@ -197,24 +213,30 @@ def draw(screen, styles, interval, poller, view, selected, notes=None,
     screen.refresh()
 
 
-def dashboard(screen, interval, mode, mode_note, url=""):
+def dashboard(screen, interval, mode, mode_note, url="", excluded=()):
     styles = start_colors()
     screen.timeout(250)
     poller = Poller(interval, url)
     deployer = deploy.Deployer()
     version = local_version()
-    selected, attempted = 0, set()
+    selected, attempted, warned = 0, set(), False
     prompt, message = None, mode_note
     while True:
         view = poller.view()
         rows, targets = view[0] or [], view[1]
         selected = render.step(selected, 0, max(len(rows), 1))
         here = rows[0].snapshot.plugin if rows and rows[0].snapshot else None
-        picks = (deploy.auto_targets(rows, targets, version, attempted)
-                 if mode == "auto" else [])
+        unknown = unknown_excluded(excluded, rows)
+        if unknown and not warned:
+            warned = True
+            message = ("deploy_exclude names no machine: "
+                       f"{', '.join(unknown)}; auto deploy is paused")
+        picks = (deploy.auto_targets(rows, targets, version, attempted,
+                                     excluded)
+                 if mode == "auto" and not unknown else [])
         attempted.update(label for label, _target in picks)
         start_deploys(deployer, here, picks)
-        notes = [notes_for(row, i == 0, version, deployer, view[4])
+        notes = [notes_for(row, i == 0, version, deployer, view[4], excluded)
                  for i, row in enumerate(rows)]
         if prompt:
             message = f"deploy {version} to {prompt[0]}? y/n"
@@ -237,7 +259,7 @@ def dashboard(screen, interval, mode, mode_note, url=""):
         if key == ord("r"):
             poller.refresh()
         elif key == ord("d") and rows:
-            message = ask_deploy(mode, rows, selected, version)
+            message = ask_deploy(mode, rows, selected, version, excluded)
             if message is None:
                 prompt = (rows[selected].label, targets[selected])
         elif key in moves and rows:
@@ -250,26 +272,33 @@ def dashboard(screen, interval, mode, mode_note, url=""):
             screen.clear()
 
 
-def notes_for(row, is_here, version, deployer, polled=None):
+def notes_for(row, is_here, version, deployer, polled=None, excluded=()):
     """The plugin line for one card; this machine is always current.
 
-    ``polled`` is when the poll behind ``row`` began.
+    ``polled`` is when the poll behind ``row`` began. A machine in
+    ``excluded`` says so after its state.
     """
     if row.snapshot is None:
         return None
     entry = row.snapshot.plugin
     state = "current" if is_here and entry else deploy.plugin_state(
         version, entry)
-    return render.plugin_note(state, entry, deployer.get(row.label, polled))
+    text, style = render.plugin_note(
+        state, entry, deployer.get(row.label, polled))
+    if row.label in excluded:
+        return f"{text} · excluded", "dim"
+    return text, style
 
 
-def ask_deploy(mode, rows, selected, version):
+def ask_deploy(mode, rows, selected, version, excluded=()):
     """None to prompt for the selected card, or the reason not to."""
     if mode != "ask":
         return ("deploy is off; set deploy = \"ask\" in config.toml"
                 if mode == "off" else "deploy is automatic in auto mode")
     if selected == 0:
         return "this machine runs the plugin already"
+    if rows[selected].label in excluded:
+        return f"{rows[selected].label} is excluded from deploy"
     snap = rows[selected].snapshot
     if snap is None:
         return f"{rows[selected].label} is down"
@@ -316,9 +345,12 @@ def main(argv=None):
             print(line)
         return 0
     mode, mode_note = deploy_mode(args.deploy)
+    excluded, forced, exclude_note = deploy_excluded()
+    mode = forced or mode
     url, url_note = pipeline_url(args.pipeline)
     curses.wrapper(dashboard, args.interval, mode,
-                   join_notes(mode_note, url_note), url)
+                   join_notes(mode_note, exclude_note, url_note), url,
+                   excluded)
     return 0
 
 

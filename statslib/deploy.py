@@ -117,16 +117,17 @@ def install_argv(target, commit):
             target, "sh -c " + shlex.quote(script)]
 
 
-def auto_targets(rows, targets, local_version, attempted):
+def auto_targets(rows, targets, local_version, attempted, excluded=()):
     """(label, target) pairs auto mode should deploy to now.
 
     ``rows`` and ``targets`` are parallel and start with this machine,
     which is never a target; ``attempted`` holds labels already tried
-    this run.
+    this run, ``excluded`` the labels deploy must skip.
     """
     picks = []
     for row, target in zip(rows[1:], targets[1:]):
-        if row.label in attempted or row.snapshot is None:
+        if (row.label in attempted or row.label in excluded
+                or row.snapshot is None):
             continue
         entry = row.snapshot.plugin
         if deployable(plugin_state(local_version, entry), entry):
