@@ -69,7 +69,7 @@ Body, five lines:
 | usage attention | `usage_attention[]` |
 | held | `repos[*].held`, `hold_reason` |
 | draining | `draining` (`false`, or `{since, reason}`) |
-| stalled | `stall.condition` (workers idle past `stall_after_min` while work waits, beyond the review reserve), `stall.active` (the episode) |
+| stalled | `stall.condition` (workers idle past `stall_after_min` while work waits, beyond the review reserve), `stall.active` (the episode), `stall.clearing_since` (the condition has gone and the dispatcher is waiting for the clear to hold) |
 | not ok | `ok` is false (no vault token sink, no lock or no worker registry) |
 | lane trouble | `repos[*].gave_up`, `repos[*].crashed` |
 
@@ -91,11 +91,15 @@ counted in the CI figure, not shown as a worker line.
 
 The border and the verdict take the worst of:
 
-- **stuck** (red): `stall.condition` or `stall.active`; any `gave_up`;
-  `ok` false. Verdict `✗ stalled`, `✗ lane gave up` or `✗ not ok`.
-- **attention** (yellow): draining; a held repository; `cards > 0`;
+- **stuck** (red): `stall.condition`, or `stall.active` without
+  `clearing_since`; any `gave_up`; `ok` false. Verdict `✗ stalled`,
+  `✗ lane gave up` or `✗ not ok`.
+- **attention** (yellow): a stall clearing (`stall.active` and
+  `clearing_since`, `condition` false: work moves again, the episode
+  is not yet closed); draining; a held repository; `cards > 0`;
   `usage_attention`; `failed > 0`; a crashed lane. Verdict names the
-  first, for example `! 2 cards wait on you`, `! draining: deploy`.
+  first, for example `! stall clearing`, `! 2 cards wait on you`,
+  `! draining: deploy`.
 - **ok** (the plain border): `✓ moving` when a worker is busy, `✓ idle`
   when none is and nothing waits.
 - **unreachable** (dim border): the request failed or timed out, or the

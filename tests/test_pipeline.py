@@ -117,11 +117,31 @@ def test_a_stalled_pipeline_is_stuck_and_says_how_many_workers_idle():
     assert view.verdict == "✗ stalled: 2 workers idle with work waiting"
 
 
-def test_an_open_stall_episode_is_stuck_even_when_clearing():
+def test_an_open_stall_episode_is_stuck_until_it_starts_clearing():
     s = status()
     s["stall"]["active"] = True
     view = pipeline.summarize(s, NOW)
     assert (view.level, view.verdict) == ("stuck", "✗ stalled")
+
+
+def test_a_clearing_stall_needs_attention_not_a_person():
+    s = status()
+    s["stall"].update(active=True, clearing_since="2026-10-19T13:50:00Z")
+    view = pipeline.summarize(s, NOW)
+    assert (view.level, view.verdict) == ("attention", "! stall clearing")
+
+
+def test_a_stall_that_comes_back_while_clearing_is_stuck_again():
+    s = status()
+    s["stall"].update(condition=True, active=True,
+                      clearing_since="2026-10-19T13:50:00Z")
+    assert pipeline.summarize(s, NOW).verdict == "✗ stalled"
+
+
+def test_a_clearing_stall_comes_before_other_attention():
+    s = status(draining={"reason": "deploy"})
+    s["stall"].update(active=True, clearing_since="2026-10-19T13:50:00Z")
+    assert pipeline.summarize(s, NOW).verdict == "! stall clearing (+1)"
 
 
 def test_a_failed_job_needs_attention():

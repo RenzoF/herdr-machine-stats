@@ -179,7 +179,13 @@ def _problems(status, repos, cards, failed):
     stuck, attention = [], []
     stall = status.get("stall")
     stall = stall if isinstance(stall, dict) else {}
-    if stall.get("condition") or stall.get("active"):
+    # The dispatcher keeps an episode active for a while after work moves
+    # again (clearing_since): that is a stall ending, not a stall.
+    clearing = stall.get("active") and stall.get("clearing_since") \
+        and not stall.get("condition")
+    if clearing:
+        attention.append("! stall clearing")
+    elif stall.get("condition") or stall.get("active"):
         idle = [w for w in _dicts(stall.get("idle_workers")) if w.get("long")]
         stuck.append("✗ stalled" + (
             f": {_plural(len(idle), 'worker', 'workers')} idle with work "
