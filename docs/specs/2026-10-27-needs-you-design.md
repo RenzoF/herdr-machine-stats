@@ -1,8 +1,8 @@
 # Needs you
 
-Date: 2026-10-27. Status: design, not built. Extends issue #2 ("Drill
-from a machine card into its Herdr agents, blocked first") and its
-comment of 22 Oct.
+Date: 2026-10-27. Status: design, decisions taken (see Decisions); not
+built. Extends issue #2 ("Drill from a machine card into its Herdr
+agents, blocked first") and its comment of 22 Oct.
 
 One list of everything, on every machine machine-stats polls, that is
 waiting on you: agents that are blocked, agents that finished and you
@@ -198,7 +198,7 @@ not (Herdr's CLI reference). So:
 
 machine-stats keeps no "seen" state of its own. Herdr has no call that
 marks an agent seen without focusing it, so there is no "dismiss" key
-(see Open decisions, D4).
+(see Decisions, D4).
 
 ## Secret requests
 
@@ -504,42 +504,36 @@ To run once at implementation, and record in the PR:
 5. The dashboard at phone width through herdr-web-ui: the narrow layout,
    `!`, Enter.
 
-## Open decisions
+## Decisions
 
-Each has a recommendation; the design above follows it.
+Open when the spec was written; the owner took option A of each
+(27 to 29 Oct 2026). The design above already followed them.
 
-- **D1. Popup key.** A: suggest `prefix+u` in the README and bind
-  nothing (a plugin cannot bind keys itself). B: suggest a
-  shift-chord such as `prefix+shift+u`. **Rec A**: `prefix+u` is unbound
-  in Herdr's defaults and in the owner's config, and one key is quicker
-  for a quick look.
-- **D2. Group order.** A: waiting on you, secret requested, finished.
-  B: secret requested first, because a request expires and its agent is
-  stuck either way. **Rec A**: both groups block an agent, and a
-  request already shows its expiry; keeping blocked agents first matches
-  the cards and the blocked-first idea of #2. Revisit if expired
-  requests turn out to be common.
-- **D3. Machine-readable output for the coordinator's attention view.**
-  A: `--once --needs` prints plain text now; JSON when that view is
-  built. B: add `--json` now. **Rec A** (nothing consumes JSON yet).
-- **D4. A dismiss key for finished items.** Herdr has no "mark seen"
-  without focus. A: none; Enter (or looking at the pane) clears them.
-  B: a key that focuses the pane and comes straight back, which marks
-  it seen without leaving the list. **Rec A**: B moves the server's
-  focus behind your back, and on a remote machine it changes what an
-  attached screen there shows.
-- **D5. Where the "what it is asking" lines come from.** A: the visible
-  screen, last three meaningful lines (above). B: the agent's
-  `state_labels` and `title` only, no screen read. **Rec A**: labels
-  rarely carry the question; keep B as the fallback when the read
-  fails or yields nothing.
-- **D6. Exact wait times across restarts.** A: first seen by the
-  collector, persisted locally (above). B: a Herdr event hook in this
-  plugin (`[[events]] on = "pane.agent_status_changed"`) on each machine
-  that records the time of each change in that machine's plugin state
-  directory; exact, but it needs the plugin installed everywhere and
-  writes on each machine. **Rec A** for now; B later if the `+` lower
-  bounds turn out to matter.
-- **D7. Showing the secret's key name.** A: never; purpose and expiry
-  only. B: show the key name (not the path). **Rec A**: the purpose
-  says why, and the prompt itself shows the rest when you get there.
+- **D1. Popup key: A, decided.** The README suggests `prefix+u` and the
+  plugin binds nothing (a plugin cannot bind keys itself). `prefix+u` is
+  unbound in Herdr's defaults and in the owner's config. Not taken: a
+  shift-chord such as `prefix+shift+u`.
+- **D2. Group order: A, decided.** Waiting on you, then secret
+  requested, then finished. Both of the first two block an agent and a
+  request already shows its expiry; blocked first matches the cards and
+  #2. Not taken: secrets first. Revisit if expired requests turn out to
+  be common.
+- **D3. Machine-readable output: A, decided.** `--once --needs` prints
+  plain text now; JSON waits until the coordinator's attention view is
+  built and needs it. Not taken: `--json` now.
+- **D4. Dismiss key for finished items: A, decided.** None; Enter (or
+  looking at the pane) clears them, because Herdr has no "mark seen"
+  without focus. Not taken: a focus-and-return key, which would move the
+  server's focus behind your back and, on a remote machine, change what
+  an attached screen there shows.
+- **D5. "What it is asking" lines: A, decided.** The last three
+  meaningful lines of the visible screen, with the agent's
+  `state_labels` and title as the fallback when the read fails or
+  yields nothing. Not taken: labels and title only.
+- **D6. Wait times: A, decided.** First seen by the collector, persisted
+  locally in `needs.json`. Not taken for now: a Herdr event hook on each
+  machine recording exact change times; it needs the plugin installed
+  everywhere and writes on each machine. Revisit if the `+` lower bounds
+  turn out to matter.
+- **D7. The secret's key name: A, decided.** Never shown; purpose and
+  expiry only. Not taken: showing the key name.
