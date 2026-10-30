@@ -28,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from statslib import (  # noqa: E402
-    PLUGIN_ID, collect, config, deploy, herdr, local_version, needs,
+    PLUGIN_ID, collect, config, deploy, herdr, jump, local_version, needs,
     needsview, pipeline, render, seen, text)
 
 ENTER_KEYS = (10, 13, curses.KEY_ENTER)
@@ -242,7 +242,8 @@ def draw(screen, styles, interval, poller, view, selected, notes=None,
     title = (f" machine stats  {updated or '--:--:--'}  {status}"
              f"  every {interval:g}s")
     put(screen, 0, 0, title.ljust(width), styles["bar"])
-    keys = " arrows move  Enter btop  d deploy  r refresh  q quit"
+    keys = (" arrows move  Enter btop  d deploy  ! needs you  r refresh"
+            "  q quit")
     footer = message or note
     if footer:
         keys += f"   {footer}"
@@ -277,6 +278,37 @@ def draw(screen, styles, interval, poller, view, selected, notes=None,
     screen.refresh()
 
 
+LIST_KEYS = " ↑↓ select  Enter jump  r refresh  ! cards"
+LIST_MOVES = {curses.KEY_DOWN: 1, ord("j"): 1, curses.KEY_UP: -1,
+              ord("k"): -1, curses.KEY_NPAGE: 5, curses.KEY_PPAGE: -5}
+
+
+def list_step(key, pick, count):
+    """The selection in the full list after ``key``."""
+    return render.step(pick, LIST_MOVES.get(key, 0), max(count, 1))
+
+
+def draw_list(screen, styles, title, items, notes, pick, top, footer):
+    """The full list, scrolled so the selected item shows; returns the
+    new scroll position."""
+    height, width = screen.getmaxyx()
+    screen.erase()
+    put(screen, 0, 0, title.ljust(width), styles["bar"])
+    lines, starts = needsview.full(items, notes, width, time.time(), pick)
+    room = max(1, height - 2)
+    if starts:
+        first = starts[pick]
+        last = (starts[pick + 1] if pick + 1 < len(starts)
+                else len(lines)) - 1
+        top = max(min(top, first), last - room + 1)
+    top = max(0, min(top, max(0, len(lines) - room)))
+    for n, line in enumerate(lines[top:top + room]):
+        draw_line(screen, 1 + n, line, styles)
+    draw_line(screen, height - 1, needsview.legend(width, footer), styles)
+    screen.refresh()
+    return top
+
+
 def dashboard(screen, interval, mode, mode_note, url="", excluded=(),
               request_dir="", store=None):
     styles = start_colors()
@@ -286,6 +318,7 @@ def dashboard(screen, interval, mode, mode_note, url="", excluded=(),
     version = local_version()
     selected, attempted, warned = 0, set(), False
     prompt, message = None, mode_note
+    listing, pick, top = False, 0, 0
     while True:
         view = poller.view()
         rows, targets = view[0] or [], view[1]
@@ -301,6 +334,27 @@ def dashboard(screen, interval, mode, mode_note, url="", excluded=(),
                  if mode == "auto" and not unknown else [])
         attempted.update(label for label, _target in picks)
         start_deploys(deployer, here, picks)
+        if listing:
+            items, needs_notes = poller.needs()
+            items = items or []
+            pick = render.step(pick, 0, max(len(items), 1))
+            top = draw_list(screen, styles,
+                            f" needs you  {view[3] or '--:--:--'}", items,
+                            needs_notes, pick, top, message or LIST_KEYS)
+            key = screen.getch()
+            if key == -1:
+                continue
+            message = None  # a jump's message stays until the next key
+            if key in (ord("!"), ord("q"), 27):
+                listing = False
+            elif key == ord("r"):
+                poller.refresh()
+            elif key in ENTER_KEYS and items:
+                _landed, message = jump.jump(items[pick])
+                poller.refresh()  # a focused finished agent is now seen
+            else:
+                pick = list_step(key, pick, len(items))
+            continue
         notes = [notes_for(row, i == 0, version, deployer, view[4], excluded)
                  for i, row in enumerate(rows)]
         if prompt:
@@ -327,6 +381,8 @@ def dashboard(screen, interval, mode, mode_note, url="", excluded=(),
             message = ask_deploy(mode, rows, selected, version, excluded)
             if message is None:
                 prompt = (rows[selected].label, targets[selected])
+        elif key == ord("!"):
+            listing, pick, top, message = True, 0, 0, None
         elif key in moves and rows:
             selected = render.step(selected, moves[key], len(rows))
         elif key in ENTER_KEYS and rows and rows[selected].snapshot:

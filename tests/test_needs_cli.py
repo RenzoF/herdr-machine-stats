@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from statslib import collect, jump
+from statslib.needs import Item, Where
 from test_cli import Screen, shim, wait_until  # noqa: F401
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -103,5 +105,75 @@ def test_the_dashboard_keeps_first_seen_times_in_its_state_dir(fleet):
         ages = Path(env["HERDR_PLUGIN_STATE_DIR"]) / "needs.json"
         assert wait_until(ages.exists)
         assert "proceed" not in ages.read_text()
+    finally:
+        assert screen.quit() == 0
+
+
+def item(target=None, machine="build-box"):
+    return Item("blocked", 0, machine, target, "w1:p2", 4, "builder",
+                "api", Where(5, "api", 18, "review"), (), None, 0, False,
+                (machine, "w1:p2"))
+
+
+def test_a_local_jump_focuses_the_pane_here_and_lands(fake_herdr,
+                                                      monkeypatch):
+    herdr_shim, calls, _canned = fake_herdr
+    monkeypatch.setenv("HERDR_BIN", str(herdr_shim))
+    assert jump.jump(item()) == (True, None)
+    assert calls.read_text().splitlines() == ["agent focus w1:p2"]
+
+
+def test_a_remote_jump_focuses_it_there_and_says_where():
+    runs = []
+    landed, message = jump.jump(
+        item("me@laptop.example", "laptop"),
+        run=lambda target, script: runs.append((target, script)) or "")
+    assert not landed
+    assert message == ("laptop: workspace 5 api, tab 18 'review'. "
+                       "Pick laptop with prefix+w")
+    [(target, script)] = runs
+    assert target == "me@laptop.example"
+    assert script.startswith(collect.PATH_LINE)
+    assert script.endswith("herdr agent focus w1:p2")
+
+
+def test_a_failed_jump_says_why(monkeypatch):
+    def down(target, script):
+        raise collect.HostError("timeout")
+    assert jump.jump(item("me@laptop.example", "laptop"), run=down) == (
+        False, "laptop: could not focus: timeout")
+    monkeypatch.setenv("HERDR_BIN", "/nonexistent/herdr")
+    landed, message = jump.jump(item())
+    assert not landed and message.startswith("build-box: could not focus")
+
+
+def test_bang_opens_the_full_list_and_enter_focuses_a_local_pane(fleet):
+    env, local, _remote = fleet
+    screen = Screen(env)
+    try:
+        assert screen.wait_for("builder")
+        screen.press("!")
+        assert screen.wait_for("waiting on you (2)")
+        screen.press("\r")
+        assert wait_until(lambda: "agent focus w1:p2" in local.read_text())
+        screen.seen = b""
+        screen.press("!")  # back to the cards
+        assert screen.wait_for("CPU")
+    finally:
+        assert screen.quit() == 0
+
+
+def test_enter_on_a_remote_item_focuses_it_there_and_says_where(fleet):
+    env, _local, remote = fleet
+    screen = Screen(env)
+    try:
+        assert screen.wait_for("codex")
+        screen.press("!")
+        assert screen.wait_for("waiting on you (2)")
+        screen.press("j")
+        screen.press("\r")
+        assert wait_until(lambda: "agent focus w9:p1" in remote.read_text())
+        assert screen.wait_for("Pick laptop with prefix+w")
+        screen.press("!")
     finally:
         assert screen.quit() == 0
