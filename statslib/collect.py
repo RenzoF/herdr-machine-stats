@@ -13,7 +13,7 @@ import subprocess
 import threading
 from collections import namedtuple
 
-from statslib import PLUGIN_ID, herdr, needs
+from statslib import PLUGIN_ID, herdr, needs, prompts
 
 Machine = namedtuple("Machine", "label target enabled")
 Snapshot = namedtuple(
@@ -86,6 +86,9 @@ def script(stats=True, request_dir=""):
               f"echo; echo {WORKSPACES_MARKER}",
               herdr.WORKSPACE_LIST_SHELL,
               f"echo; echo {TABS_MARKER}", herdr.TAB_LIST_SHELL]
+    if request_dir:
+        lines += [f"echo; echo {REQUESTS_MARKER}",
+                  prompts.scan_shell(request_dir)]
     if stats:
         lines += [f"echo; echo {PLUGIN_MARKER}",
                   herdr.plugin_list_shell(PLUGIN_ID)]
