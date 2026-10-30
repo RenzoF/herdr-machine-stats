@@ -3,8 +3,10 @@
     deploy = "off"   # off | ask | auto
     pipeline_url = ""   # the dispatcher's /status; empty: no pipeline card
     deploy_exclude = ["name"]   # machines (card names) deploy skips
+    secret_request_dir = ""   # secret prompt's request dir name; "" none
 """
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -69,3 +71,27 @@ def load_pipeline_url(directory):
         return "", (f"pipeline_url = {url!r} is not an http(s) URL; "
                     "no pipeline card")
     return url, None
+
+
+DIR_NAME = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def load_secret_request_dir(directory):
+    """(name, note): the directory name under which a secret-prompt
+    plugin keeps its requests; "" means none are looked for."""
+    path = Path(directory) / "config.toml"
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+    except FileNotFoundError:
+        return "", None
+    except (OSError, tomllib.TOMLDecodeError):
+        return "", None  # load() already says the file is unreadable
+    name = data.get("secret_request_dir", "")
+    if name == "":
+        return "", None
+    if (not isinstance(name, str) or not DIR_NAME.fullmatch(name)
+            or name in (".", "..")):
+        return "", ("secret_request_dir must be a directory name; "
+                    "no secret requests")
+    return name, None

@@ -78,3 +78,31 @@ def test_a_deploy_exclude_that_is_not_a_list_of_names_is_reported(
     (tmp_path / "config.toml").write_text(f"deploy_exclude = {value}\n")
     names, note = config.load_deploy_exclude(tmp_path)
     assert names == () and "deploy_exclude" in note and "off" in note
+
+
+def test_no_secret_request_dir_by_default(tmp_path):
+    assert config.load_secret_request_dir(tmp_path) == ("", None)
+    (tmp_path / "config.toml").write_text('deploy = "ask"\n')
+    assert config.load_secret_request_dir(tmp_path) == ("", None)
+
+
+def test_the_secret_request_dir_name_is_read(tmp_path):
+    (tmp_path / "config.toml").write_text(
+        'secret_request_dir = "secret-prompt"\n')
+    assert config.load_secret_request_dir(tmp_path) == (
+        "secret-prompt", None)
+
+
+@pytest.mark.parametrize("value", [
+    '"../x"', '"a/b"', '".."', '"."', '"a b"', "3", '["x"]'])
+def test_a_bad_secret_request_dir_is_reported_and_ignored(tmp_path,
+                                                          value):
+    (tmp_path / "config.toml").write_text(f"secret_request_dir = {value}\n")
+    name, note = config.load_secret_request_dir(tmp_path)
+    assert name == "" and "secret_request_dir" in note
+
+
+def test_broken_toml_gives_no_secret_requests_quietly(tmp_path):
+    (tmp_path / "config.toml").write_text("deploy = \n")
+    # load() already reports the unreadable file.
+    assert config.load_secret_request_dir(tmp_path) == ("", None)
