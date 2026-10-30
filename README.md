@@ -23,18 +23,85 @@ machine.
   or `remote error` (the host answered but the read failed; a missing
   command is named, as in `remote error: nproc not found`). Anything
   else shows ssh's own first line.
-- **Agents**: ◐ blocked, ● working, ○ idle, ✓ done.
+- **Agents**: see "Status marks" below.
 - **Plugin line**: the last line of a card says whether this plugin is
   installed on that machine (see "Deploying to your machines").
 - **Keys**: arrows or h/j/k/l move, Enter opens btop on the selected
   machine (over `ssh -t`), d deploys this plugin to the selected machine
-  (deploy mode "ask"), r refreshes, q quits.
+  (deploy mode "ask"), `!` shows the full needs-you list (below), r
+  refreshes, q quits.
 
 Each machine is read with one non-interactive SSH call running a short
 POSIX shell script (Linux and macOS); CPU is sampled over half a second.
-Reads are read-only: nothing is written to the machines. The only thing
-ever installed on another machine is this plugin, by an explicit deploy,
-and deploy is off by default.
+Reads are read-only: nothing is written to the machines. The only
+changes ever made on another machine are installing this plugin, by an
+explicit deploy (off by default), and focusing a pane, when you press
+Enter on it in the needs-you list.
+
+## Status marks
+
+One legend for the cards, the needs-you list and the popup:
+
+| Mark | Meaning |
+|---|---|
+| ◐ | blocked: waiting on you |
+| ● | working |
+| ○ | idle |
+| ✓ | done: finished, not yet seen |
+| 🔑 | secret requested |
+| ? | a status this plugin does not know |
+
+## What needs you
+
+Above the cards, one list of every agent, on every machine, that waits
+on you: blocked agents, open secret requests, and agents that finished
+and you have not looked at yet, oldest first. A blocked agent shows the
+last lines of its screen; a finished one, its title. `!` opens the full
+list: arrows select, Enter jumps to the pane, `!` goes back.
+
+- **This machine**: Enter focuses the pane.
+- **Another machine**: Enter focuses the pane on that machine and says
+  where it is, for example `laptop: workspace 5 api, tab 18 'review'.
+  Pick laptop with prefix+w`: Herdr has no way for a plugin to switch
+  which machine your window shows.
+- Focusing a finished agent marks it seen, and it leaves the list.
+- Ages count from the first poll that saw the wait (`12m+` when the
+  dashboard was not running then); they are kept in the plugin's state
+  directory on this machine, never elsewhere, and hold no screen text.
+- A machine that is down or has no Herdr is listed as not counted, so
+  an empty list never hides a machine that could not be asked.
+
+The same list opens as a popup from Herdr's actions ("Show what needs
+you"), or with a key in Herdr's `config.toml`:
+
+```toml
+[[keys.command]]
+key = "prefix+u"
+type = "plugin_action"
+command = "renzof.herdr-machine-stats.needs"
+description = "needs you"
+```
+
+`python3 bin/machine-stats --once --needs` prints the list as plain
+text.
+
+### Secret requests
+
+If you run a secret-prompt plugin that keeps a directory per request,
+name that directory in `config.toml` and its open requests join the
+list (off by default):
+
+```toml
+secret_request_dir = "secret-prompt"   # default "": none
+```
+
+On each machine the dashboard looks in `$XDG_RUNTIME_DIR/<name>`,
+`/run/user/<uid>/<name>` and `~/.local/state/<name>` for directories
+named `r-` and eight hex digits, owned by you with mode 0700, under a
+day old. It reads only `request.json`, `pane.json` and `state.json`
+(size-capped) and whether `result.json` or `cancel.json` exist, and
+keeps only the request's times, panes and purpose: never a value, a
+path or a key name.
 
 ## Install
 

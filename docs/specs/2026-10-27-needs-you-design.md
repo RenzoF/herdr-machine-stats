@@ -386,8 +386,13 @@ redacted screens of blocked Claude and Codex panes (see D5).
 
 | Where | What |
 |---|---|
-| `statslib/needs.py` (new) | `Item`; parsing workspaces, tabs and requests; building and ordering the list; the first-seen store; `clean`; meaningful lines |
-| `statslib/collect.py` | the new markers in `COLLECT_SCRIPT`; the light script; `now`; `Snapshot.needs` (the parsed agents, workspaces, tabs, requests and host clock); `Machine` unchanged |
+| `statslib/needs.py` (new) | `Raw`, `Item`, `Where`, `Note`; building and ordering the list; screen lines |
+| `statslib/text.py` (new) | cleaning text from other programs; cell widths, cutting and padding; meaningful screen lines |
+| `statslib/prompts.py` (new) | secret requests: the scan shell, parsing, the open rules; metadata only |
+| `statslib/seen.py` (new) | first-seen times and the last list, kept locally under a lock |
+| `statslib/needsview.py` (new) | the section, the full list, the legend line and the plain text |
+| `statslib/jump.py` (new) | Enter: focus the pane here or on its machine |
+| `statslib/collect.py` | the new markers in `COLLECT_SCRIPT`; the light script; `now`; `Row.needs` (the parsed agents, workspaces, tabs, requests and host clock; a light poll has no snapshot); `Machine` unchanged |
 | `statslib/herdr.py` | shell fragments for `workspace list`, `tab list` and `agent read`, and the focus command (still the only module that names `herdr`) |
 | `statslib/render.py` | the section and full-list lines; the legend in `AGENT_MARKS`; the cell-aware fit |
 | `statslib/config.py` | `secret_request_dir` |
