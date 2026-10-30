@@ -192,6 +192,17 @@ TAB_LIST = (
     '"number":18,"label":"review"}]}}')
 
 
+def test_read_screens_reads_all_panes_of_a_host_in_one_call():
+    run = Runner("--pane-- w1:p1\nline\n")
+    assert collect.read_screens("me@laptop.example", ["w1:p1"], run) == {
+        "w1:p1": ["line"]}
+    [(target, script)] = run.calls
+    assert target == "me@laptop.example"
+    assert script.startswith(collect.PATH_LINE)
+    down = Runner(collect.HostError("timeout"))
+    assert collect.read_screens("me@laptop.example", ["w1:p1"], down) == {}
+
+
 def test_the_light_script_reads_agents_and_places_without_stats(
         fake_herdr):
     shim, calls, canned = fake_herdr

@@ -153,3 +153,35 @@ def order(items):
                 else LAST,
                 where.tab if where and where.tab is not None else LAST)
     return sorted(items, key=key)
+
+
+class Screens:
+    """The last meaningful lines of each blocked agent's screen (D5).
+
+    A blocked screen does not change while it waits on the same
+    question, so each (machine, pane, state_change_seq) is read once,
+    and all new ones of a machine in one call. Kept in memory only.
+    """
+
+    def __init__(self, read):
+        self.read = read  # read(target, panes) -> {pane: lines}
+        self.lines = {}
+
+    def fill(self, items):
+        blocked = [i for i in items if i.group == "blocked"]
+        wanted = {}
+        for item in blocked:
+            if (item.machine, item.pane_id, item.seq) not in self.lines:
+                wanted.setdefault((item.machine, item.target), []).append(
+                    item.pane_id)
+        for (machine, target), panes in wanted.items():
+            read = self.read(target, panes)
+            for item in blocked:
+                if item.machine == machine and item.pane_id in panes:
+                    self.lines[(machine, item.pane_id, item.seq)] = tuple(
+                        text.meaningful(read.get(item.pane_id, [])))
+        live = {(i.machine, i.pane_id, i.seq) for i in blocked}
+        self.lines = {k: v for k, v in self.lines.items() if k in live}
+        return [i._replace(detail=self.lines.get(
+                    (i.machine, i.pane_id, i.seq)) or i.detail)
+                if i.group == "blocked" else i for i in items]

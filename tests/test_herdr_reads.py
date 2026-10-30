@@ -1,6 +1,8 @@
 """statslib.herdr: the agent, workspace and tab reads the list needs."""
 
 import json
+import os
+import subprocess
 
 import pytest
 
@@ -40,3 +42,28 @@ def test_agents_are_the_dicts_of_the_agent_list():
         {"pane_id": "w1:p2", "agent_status": "blocked"}, 7]}})
     assert herdr.agents(text) == [
         {"pane_id": "w1:p2", "agent_status": "blocked"}]
+
+
+def test_screens_are_read_with_one_marker_line_per_pane(fake_herdr):
+    shim, calls, canned = fake_herdr
+    (canned / "agent-read").write_text("Do you want to proceed?\n❯ 1. Yes\n")
+    env = dict(os.environ, PATH=f"{shim.parent}{os.pathsep}"
+               f"{os.environ['PATH']}")
+    out = subprocess.run(
+        ["sh", "-c", herdr.read_shell(["w1:p1", "w1:p2"])], env=env,
+        capture_output=True, text=True, timeout=20).stdout
+    screen = ["Do you want to proceed?", "❯ 1. Yes"]
+    assert herdr.screens(out) == {"w1:p1": screen, "w1:p2": screen}
+    assert calls.read_text().splitlines() == [
+        "agent read w1:p1 --source visible --format text",
+        "agent read w1:p2 --source visible --format text"]
+
+
+def test_focus_names_the_pane_here_and_in_a_remote_shell(fake_herdr,
+                                                         monkeypatch):
+    shim, calls, _canned = fake_herdr
+    monkeypatch.setenv("HERDR_BIN", str(shim))
+    herdr.focus("w1:p2")
+    assert calls.read_text().splitlines() == ["agent focus w1:p2"]
+    assert herdr.focus_shell("w1:p2") == "herdr agent focus w1:p2"
+    assert herdr.focus_shell("a b") == "herdr agent focus 'a b'"

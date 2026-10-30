@@ -5,6 +5,7 @@ Only this module names the herdr CLI.
 
 import json
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -138,3 +139,38 @@ def plugin_entry(text):
     if not isinstance(plugins, list):
         return None
     return plugins[0] if plugins else {}
+
+
+READ_MARKER = "--pane--"
+
+
+def read_shell(pane_ids):
+    """Shell that prints each pane's visible screen as plain text, each
+    after a ``--pane-- <id>`` line. Reading never marks an agent seen."""
+    return "\n".join(
+        f"echo {READ_MARKER} {shlex.quote(pane)}\n"
+        f"herdr agent read {shlex.quote(pane)} --source visible"
+        " --format text 2>/dev/null | tail -n 60"
+        for pane in pane_ids)
+
+
+def screens(text):
+    """{pane_id: lines} from ``read_shell`` output."""
+    found, lines = {}, None
+    for line in text.splitlines():
+        if line.startswith(READ_MARKER + " "):
+            lines = found.setdefault(line[len(READ_MARKER) + 1:], [])
+        elif lines is not None:
+            lines.append(line)
+    return found
+
+
+def focus(pane_id, timeout=5):
+    """Focus ``pane_id`` on this machine's Herdr. This marks a finished
+    agent seen."""
+    _local(["agent", "focus", pane_id], timeout)
+
+
+def focus_shell(pane_id):
+    """The same focus, as a shell fragment for another machine."""
+    return f"herdr agent focus {shlex.quote(pane_id)}"

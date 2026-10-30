@@ -121,3 +121,51 @@ def test_order_is_group_then_oldest_then_machine_then_place():
     assert got == [("blocked", 20, 0, 1, 9), ("blocked", 20, 0, 2, 1),
                    ("blocked", 20, 1, 1, 1), ("blocked", 50, 0, 1, 1),
                    ("secret", 10, 0, 1, 1), ("done", 1, 0, 1, 1)]
+
+
+class Reads:
+    """A fake screen reader: what each pane shows, and the calls."""
+
+    def __init__(self, screens):
+        self.screens, self.calls = screens, []
+
+    def __call__(self, target, panes):
+        self.calls.append((target, list(panes)))
+        return {p: self.screens[p] for p in panes if p in self.screens}
+
+
+def blocked(pane, seq=7, detail=()):
+    return needs.Item("blocked", 0, "laptop", "me@laptop.example", pane,
+                      seq, "claude", "api", None, detail, None, 1000, False,
+                      ("laptop", pane))
+
+
+def test_screen_lines_are_read_once_per_wait_one_call_per_machine():
+    reads = Reads({"w1:p1": ["╭────╮", "│ Proceed? │", "│ ❯ 1. Yes │",
+                             "╰────╯"],
+                   "w1:p2": ["Allow?"]})
+    screens = needs.Screens(reads)
+    items = [blocked("w1:p1"), blocked("w1:p2")]
+    assert [i.detail for i in screens.fill(items)] == [
+        ("Proceed?", "❯ 1. Yes"), ("Allow?",)]
+    assert reads.calls == [("me@laptop.example", ["w1:p1", "w1:p2"])]
+    screens.fill(items)
+    assert len(reads.calls) == 1  # the same wait: nothing read again
+    screens.fill([blocked("w1:p1", seq=8)])
+    assert reads.calls[-1] == ("me@laptop.example", ["w1:p1"])
+
+
+def test_a_failed_read_keeps_the_fallback_and_is_not_retried():
+    reads = Reads({})
+    screens = needs.Screens(reads)
+    [item] = screens.fill([blocked("w1:p1", detail=("secret wanted",))])
+    assert item.detail == ("secret wanted",)
+    screens.fill([blocked("w1:p1", detail=("secret wanted",))])
+    assert len(reads.calls) == 1
+
+
+def test_only_blocked_agents_are_read():
+    reads = Reads({})
+    done = blocked("w1:p1")._replace(group="done", detail=("title",))
+    assert needs.Screens(reads).fill([done]) == [done]
+    assert reads.calls == []

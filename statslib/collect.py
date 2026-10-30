@@ -241,6 +241,17 @@ def run_host(target, script, timeout=15):
     return done.stdout
 
 
+def read_screens(target, panes, run=None):
+    """{pane: screen lines} for ``panes`` on ``target`` (None: here), in
+    one call; {} when the host cannot be read."""
+    run = run or run_host
+    try:
+        return herdr.screens(
+            run(target, PATH_LINE + "\n" + herdr.read_shell(panes)))
+    except HostError:
+        return {}
+
+
 def collect(machine, run=None, stats=True, request_dir=""):
     """One row for ``machine``; a failure becomes the row's error.
 
