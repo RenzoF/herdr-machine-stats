@@ -6,6 +6,7 @@ this plugin's entry in ``herdr plugin list``; nothing is installed on,
 written to, or sent to the machines.
 """
 
+import re
 import shlex
 import subprocess
 import threading
@@ -128,6 +129,45 @@ class HostError(RuntimeError):
     """A host could not be read. The message is the reason to show."""
 
 
+# What ssh prints when it never reached the remote shell (it then exits
+# 255), by the short reason shown for it. The first kind found wins.
+SSH_FAILURES = (
+    ("unresolved", ("Could not resolve hostname", "Name or service not",
+                    "nodename nor servname", "failure in name resolution")),
+    ("auth refused", ("Permission denied",
+                      "Too many authentication failures")),
+    ("timeout", ("timed out",)),
+    ("unreachable", ("Connection refused", "No route to host",
+                     "Network is unreachable", "Connection closed",
+                     "Connection reset")),
+)
+# A shell's "not found" for a missing command: zsh first (bash and
+# dash's pattern also matches zsh's wording, naming zsh), then bash, dash.
+NOT_FOUND = (re.compile(r"command not found: (\S+)"),
+             re.compile(r"([^\s:]+): (?:command )?not found"))
+
+
+def failure_reason(code, stderr, remote=True):
+    """The short reason a read that exited ``code`` failed.
+
+    Over SSH, exit 255 is ssh's own failure, sorted by its message; any
+    other code is the remote shell's. An ssh message this does not know
+    is shown as ssh wrote it (its first line).
+    """
+    if remote and code == 255:
+        for reason, needles in SSH_FAILURES:
+            if any(n in stderr for n in needles):
+                return reason
+        lines = stderr.strip().splitlines()
+        return lines[0] if lines else f"exit {code}"
+    where = "remote error" if remote else "error"
+    if code == 127:
+        found = [m for p in NOT_FOUND if (m := p.search(stderr))]
+        name = found[0].group(1) if found else "command"
+        return f"{where}: {name} not found"
+    return f"{where}: exit {code}"
+
+
 def run_host(target, script, timeout=15):
     """Run ``script`` under sh on ``target`` and return its stdout.
 
@@ -148,8 +188,8 @@ def run_host(target, script, timeout=15):
     except OSError as exc:
         raise HostError(str(exc)) from exc
     if done.returncode:
-        lines = done.stderr.strip().splitlines()
-        raise HostError(lines[0] if lines else f"exit {done.returncode}")
+        raise HostError(failure_reason(done.returncode, done.stderr,
+                                       remote=target is not None))
     return done.stdout
 
 

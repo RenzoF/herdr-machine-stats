@@ -17,6 +17,12 @@ machine.
   percentage takes the colour of its band.
 - **Borders**: cyan marks the selected card, yellow an alert (a blocked
   agent, or memory or disk above 90%), red a machine that is down.
+- **Down**: a down card, and its `--once` row, says why in a few words:
+  `unresolved` (this machine cannot resolve the name), `auth refused`
+  (the key was refused), `timeout`, `unreachable` (refused or no route),
+  or `remote error` (the host answered but the read failed; a missing
+  command is named, as in `remote error: nproc not found`). Anything
+  else shows ssh's own first line.
 - **Agents**: ◐ blocked, ● working, ○ idle, ✓ done.
 - **Plugin line**: the last line of a card says whether this plugin is
   installed on that machine (see "Deploying to your machines").

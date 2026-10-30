@@ -243,7 +243,7 @@ def test_run_host_with_no_target_runs_on_this_machine(
     assert collect.parse_snapshot(out).os == platform.system()
 
 
-def test_run_host_turns_an_ssh_failure_into_its_first_error_line(
+def test_run_host_turns_an_ssh_failure_into_a_short_reason(
         tmp_path, monkeypatch):
     write_shim(tmp_path, "ssh", (
         'echo "me@10.0.0.9: Permission denied (publickey)." >&2\n'
@@ -252,7 +252,66 @@ def test_run_host_turns_an_ssh_failure_into_its_first_error_line(
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
     with pytest.raises(collect.HostError) as err:
         collect.run_host("me@10.0.0.9", "true")
-    assert str(err.value) == "me@10.0.0.9: Permission denied (publickey)."
+    assert str(err.value) == "auth refused"
+
+
+def test_run_host_names_the_command_this_machine_lacks():
+    with pytest.raises(collect.HostError) as err:
+        collect.run_host(None, "no-such-command-xyz")
+    assert str(err.value) == "error: no-such-command-xyz not found"
+
+
+# ssh's stderr as recorded on Linux (OpenSSH 10) and macOS, and the remote
+# shell's for a missing command (bash, dash, zsh).
+@pytest.mark.parametrize("code, stderr, want", [
+    (255, "ssh: Could not resolve hostname mini: Name or service not "
+          "known", "unresolved"),
+    (255, "ssh: Could not resolve hostname mini: nodename nor servname "
+          "provided, or not known", "unresolved"),
+    (255, "ssh: Could not resolve hostname mini: Temporary failure in "
+          "name resolution", "unresolved"),
+    (255, "nobody@127.0.0.1: Permission denied (publickey).",
+     "auth refused"),
+    (255, "Warning: Permanently added '10.0.0.9' (ED25519) to the list of "
+          "known hosts.\nme@10.0.0.9: Permission denied "
+          "(publickey,password).", "auth refused"),
+    (255, "ssh: connect to host 10.255.255.1 port 22: Connection timed "
+          "out", "timeout"),
+    (255, "ssh: connect to host 10.0.0.9 port 22: Operation timed out",
+     "timeout"),
+    (255, "ssh: connect to host 127.0.0.1 port 1: Connection refused",
+     "unreachable"),
+    (255, "ssh: connect to host 10.0.0.9 port 22: No route to host",
+     "unreachable"),
+    (255, "ssh: connect to host 10.0.0.9 port 22: Network is unreachable",
+     "unreachable"),
+    (255, "kex_exchange_identification: Connection closed by remote host",
+     "unreachable"),
+    (127, "sh: line 1: herdr: command not found",
+     "remote error: herdr not found"),
+    (127, "sh: 1: nproc: not found", "remote error: nproc not found"),
+    (127, "zsh: command not found: sh", "remote error: sh not found"),
+    (127, "", "remote error: command not found"),
+    (2, "awk: syntax error", "remote error: exit 2"),
+])
+def test_a_failed_read_gets_one_short_reason(code, stderr, want):
+    assert collect.failure_reason(code, stderr) == want
+
+
+@pytest.mark.parametrize("code, stderr, want", [
+    (255, "Host key verification failed.",
+     "Host key verification failed."),
+    (255, "", "exit 255"),
+])
+def test_an_unrecognised_ssh_failure_shows_ssh_s_own_words(
+        code, stderr, want):
+    assert collect.failure_reason(code, stderr) == want
+
+
+def test_on_this_machine_there_is_no_ssh_and_nothing_is_remote():
+    assert collect.failure_reason(
+        255, "Permission denied", remote=False) == "error: exit 255"
+    assert collect.failure_reason(1, "", remote=False) == "error: exit 1"
 
 
 def test_run_host_gives_up_on_a_hung_host(tmp_path, monkeypatch):
@@ -293,7 +352,7 @@ def test_format_table_lists_every_machine_under_a_header():
         collect.Row("omarchy", snap(load=0.05, ncpu=8, cpu_pct=1, mem_pct=9,
                                     disk_pct=5, agents=None), None),
         collect.Row("lenovo", snap(agents={}), None),
-        collect.Row("mini", None, "Permission denied (publickey)."),
+        collect.Row("mini", None, "auth refused"),
         collect.Row("macmini", None, "disabled"),
     ]
     got = [cells(line) for line in collect.format_table(rows)]
@@ -303,7 +362,7 @@ def test_format_table_lists_every_machine_under_a_header():
          "blocked 1, working 1, idle 2"],
         ["omarchy", "1%", "0.1/8", "9%", "5%", "-"],
         ["lenovo", "46%", "7.6/12", "75%", "64%", "none"],
-        ["mini", "down: Permission denied (publickey)."],
+        ["mini", "down: auth refused"],
         ["macmini", "disabled"],
     ]
 
