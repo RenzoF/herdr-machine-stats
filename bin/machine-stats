@@ -16,7 +16,9 @@ config.toml; the default is off). With a dispatcher URL (--pipeline or
 pipeline_url in config.toml) one more read-only card shows that pipeline.
 """
 import argparse
+import contextlib
 import curses
+import os
 import socket
 import subprocess
 import sys
@@ -26,8 +28,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from statslib import (  # noqa: E402
-    PLUGIN_ID, collect, config, deploy, herdr, local_version, pipeline,
-    render)
+    PLUGIN_ID, collect, config, deploy, herdr, local_version, needs,
+    needsview, pipeline, render, seen, text)
 
 ENTER_KEYS = (10, 13, curses.KEY_ENTER)
 # Style name -> (256-colour foreground, 8-colour fallback, extra attribute).
@@ -90,37 +92,85 @@ def pipeline_url(override):
         return "", None  # deploy_mode already says there is no config dir
 
 
+def secret_request_dir():
+    """The secret-prompt request directory name ("" for none), and a
+    note when a bad value was ignored."""
+    try:
+        return config.load_secret_request_dir(herdr.config_dir(PLUGIN_ID))
+    except herdr.HerdrError:
+        return "", None  # deploy_mode already says there is no config dir
+
+
+def gather_needs(rows, targets, store, screens, interval):
+    """(items, notes) of one poll: built, stamped with first-seen times,
+    blocked screens read, ordered, and kept for the popup."""
+    stamp = time.time()
+    items, notes = needs.build(rows, targets, stamp)
+    answered = {row.label for row in rows if row.needs is not None}
+    try:
+        items = store.stamp(items, answered, stamp, interval)
+    except OSError:  # no state dir: ages count from now, as lower bounds
+        items = [i if i.first_seen is not None
+                 else i._replace(first_seen=stamp, approx=True)
+                 for i in items]
+    items = needs.order(screens.fill(items))
+    with contextlib.suppress(OSError):
+        store.save_list(items, stamp)
+    return items, notes
+
+
 def join_notes(*notes):
     return "; ".join(n for n in notes if n) or None
 
 
 class Poller:
-    """Polls every machine in the background; the view never blocks."""
+    """Polls every machine in the background; the view never blocks.
 
-    def __init__(self, interval, url=""):
+    ``light`` polls skip the CPU sample and the plugin list (the
+    popup); rows then have needs data and no snapshot.
+    """
+
+    def __init__(self, interval, url="", request_dir="", store=None,
+                 light=False):
         self.interval = interval
         self.watcher = pipeline.Watcher(url, interval) if url else None
+        self.request_dir, self.light = request_dir, light
+        self.store = store or seen.Store(seen.state_dir(os.environ))
+        self.screens = needs.Screens(collect.read_screens)
         self.lock = threading.Lock()
         self.wake = threading.Event()
         self.history = render.History()
         self.rows, self.targets, self.note, self.updated = None, [], None, ""
         self.polled = None  # time.monotonic() when the latest poll began
+        self.items, self.needs_notes = None, []
         threading.Thread(target=self.loop, daemon=True).start()
 
     def loop(self):
         while True:
             began = time.monotonic()
             found, note = load_machines()
-            rows = collect.poll(socket.gethostname(), found)
+            rows = collect.poll(socket.gethostname(), found,
+                                stats=not self.light,
+                                request_dir=self.request_dir)
+            targets = [None, *(m.target for m in found)]
             with self.lock:
                 self.history.record(rows)
                 self.rows = rows
-                self.targets = [None, *(m.target for m in found)]
+                self.targets = targets
                 self.note = note
                 self.updated = time.strftime("%H:%M:%S")
                 self.polled = began
+            items, notes = gather_needs(rows, targets, self.store,
+                                        self.screens, self.interval)
+            with self.lock:
+                self.items, self.needs_notes = items, notes
             self.wake.wait(self.interval)
             self.wake.clear()
+
+    def needs(self):
+        """(items, notes) of the latest poll; items is None before it."""
+        with self.lock:
+            return self.items, self.needs_notes
 
     def view(self):
         with self.lock:
@@ -175,6 +225,14 @@ def put(screen, y, x, text, attr=0):
             pass
 
 
+def draw_line(screen, y, line, styles, x=0):
+    """One line of ``(text, style)`` parts from column ``x``, placed by
+    terminal cells."""
+    for value, style in line:
+        put(screen, y, x, value, styles.get(style, 0))
+        x += text.cells(value)
+
+
 def draw(screen, styles, interval, poller, view, selected, notes=None,
          message=None):
     rows, _targets, note, updated, _polled = view
@@ -192,9 +250,18 @@ def draw(screen, styles, interval, poller, view, selected, notes=None,
     if not rows:
         screen.refresh()
         return
+    items, needs_notes = poller.needs()
+    if items is None:
+        section = [needsview.fit([(" needs you: polling...", "dim")],
+                                 width)]
+    else:
+        section = needsview.section(items, needs_notes, width, height,
+                                    time.time())
+    for n, line in enumerate(section):
+        draw_line(screen, 1 + n, line, styles)
     extra = poller.watcher is not None
     columns, card_width = render.grid(len(rows) + extra, width)
-    visible = max(1, (height - 2) // render.CARD_HEIGHT)
+    visible = max(1, (height - 2 - len(section)) // render.CARD_HEIGHT)
     first = max(0, selected // columns - visible + 1) * columns
     with poller.lock:
         cards = [render.card(row, poller.history, card_width, i == selected,
@@ -203,20 +270,18 @@ def draw(screen, styles, interval, poller, view, selected, notes=None,
         if extra:
             cards.append(render.pipeline_card(poller.pipeline(), card_width))
     for i, lines in enumerate(cards[first:first + visible * columns]):
-        top = 1 + (i // columns) * render.CARD_HEIGHT
+        top = 1 + len(section) + (i // columns) * render.CARD_HEIGHT
         left = (i % columns) * card_width
         for n, line in enumerate(lines):
-            x = left
-            for text, style in line:
-                put(screen, top + n, x, text, styles.get(style, 0))
-                x += len(text)
+            draw_line(screen, top + n, line, styles, left)
     screen.refresh()
 
 
-def dashboard(screen, interval, mode, mode_note, url="", excluded=()):
+def dashboard(screen, interval, mode, mode_note, url="", excluded=(),
+              request_dir="", store=None):
     styles = start_colors()
     screen.timeout(250)
-    poller = Poller(interval, url)
+    poller = Poller(interval, url, request_dir, store)
     deployer = deploy.Deployer()
     version = local_version()
     selected, attempted, warned = 0, set(), False
@@ -359,9 +424,12 @@ def main(argv=None):
     excluded, forced, exclude_note = deploy_excluded()
     mode = forced or mode
     url, url_note = pipeline_url(args.pipeline)
+    request_dir, request_note = secret_request_dir()
+    store = seen.Store(seen.state_dir(os.environ))
     curses.wrapper(dashboard, args.interval, mode,
-                   join_notes(mode_note, exclude_note, url_note), url,
-                   excluded)
+                   join_notes(mode_note, exclude_note, url_note,
+                              request_note), url, excluded, request_dir,
+                   store)
     return 0
 
 

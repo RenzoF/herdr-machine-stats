@@ -9,10 +9,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 @pytest.fixture(autouse=True)
-def outside_herdr(monkeypatch):
-    """Keep the suite away from any Herdr session that may be running it."""
+def outside_herdr(monkeypatch, tmp_path_factory):
+    """Keep the suite away from any Herdr session that may be running it,
+    and from the real state directory (first-seen times)."""
     monkeypatch.delenv("HERDR_ENV", raising=False)
     monkeypatch.setenv("HERDR_BIN", "/nonexistent/herdr")
+    monkeypatch.setenv("HERDR_PLUGIN_STATE_DIR",
+                       str(tmp_path_factory.mktemp("state")))
 
 
 @pytest.fixture

@@ -268,7 +268,7 @@ class Halt(Exception):
 def test_the_poller_reports_when_its_latest_poll_began(monkeypatch):
     command = load_command()
     monkeypatch.setattr(command, "load_machines", lambda: ([], None))
-    monkeypatch.setattr(collect, "poll", lambda label, found: [])
+    monkeypatch.setattr(collect, "poll", lambda label, found, **kw: [])
     # No background thread (it would linger, and the pty tests fork).
     monkeypatch.setattr(command.threading, "Thread", lambda **kw: type(
         "NoThread", (), {"start": lambda self: None})())
