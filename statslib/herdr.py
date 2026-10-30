@@ -74,6 +74,52 @@ def status_counts(text):
         return None
 
 
+WORKSPACE_LIST_SHELL = "herdr workspace list 2>/dev/null"
+TAB_LIST_SHELL = "herdr tab list 2>/dev/null"
+
+
+def _result_list(text, key):
+    """The dicts in ``result[key]`` of a herdr JSON answer, or None."""
+    try:
+        items = json.loads(text)["result"][key]
+    except (ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(items, list):
+        return None
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _numbered(items, id_field):
+    """{id: (number, label)}: the numbers and labels Herdr's screen
+    shows. Entries without a string id or an integer number are
+    skipped."""
+    if items is None:
+        return None
+    found = {}
+    for item in items:
+        ident, number = item.get(id_field), item.get("number")
+        if (isinstance(ident, str) and isinstance(number, int)
+                and not isinstance(number, bool)):
+            label = item.get("label")
+            found[ident] = (number, label if isinstance(label, str) else "")
+    return found
+
+
+def agents(text):
+    """The agents in ``herdr agent list`` output; None when unusable."""
+    return _result_list(text, "agents")
+
+
+def workspaces(text):
+    """{workspace_id: (number, label)} from ``herdr workspace list``."""
+    return _numbered(_result_list(text, "workspaces"), "workspace_id")
+
+
+def tabs(text):
+    """{tab_id: (number, label)} from ``herdr tab list``."""
+    return _numbered(_result_list(text, "tabs"), "tab_id")
+
+
 def plugin_list_shell(plugin_id):
     """``herdr plugin list`` for one plugin, as a remote shell fragment."""
     return f"herdr plugin list --plugin {plugin_id} --json 2>/dev/null"

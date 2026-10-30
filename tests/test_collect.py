@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 import statslib
-from statslib import collect, herdr
+from statslib import collect, herdr, needs
 
 # `herdr machine list`: id, label, ssh target, session, state. The two
 # omarchy-lenovo rows share a target, as happened on agent-desk.
@@ -124,6 +124,8 @@ def test_collector_output_parses_on_this_host_and_asks_herdr_for_agents(
     assert snap.plugin == {}
     assert calls.read_text().splitlines() == [
         "agent list",
+        "workspace list",
+        "tab list",
         "plugin list --plugin renzof.herdr-machine-stats --json",
     ]
 
@@ -180,6 +182,67 @@ class Runner:
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
+
+
+WORKSPACE_LIST = (
+    '{"result":{"workspaces":[{"workspace_id":"w1","number":5,'
+    '"label":"api"}]}}')
+TAB_LIST = (
+    '{"result":{"tabs":[{"tab_id":"w1:t3","workspace_id":"w1",'
+    '"number":18,"label":"review"}]}}')
+
+
+def test_the_light_script_reads_agents_and_places_without_stats(
+        fake_herdr):
+    shim, calls, canned = fake_herdr
+    (canned / "agent-list").write_text(AGENT_LIST)
+    (canned / "workspace-list").write_text(WORKSPACE_LIST)
+    (canned / "tab-list").write_text(TAB_LIST)
+    env = dict(os.environ, PATH=f"{shim.parent}{os.pathsep}"
+               f"{os.environ['PATH']}")
+    began = time.time()
+    done = subprocess.run(["sh", "-c", collect.script(stats=False)],
+                          env=env, capture_output=True, text=True,
+                          timeout=30)
+    assert done.returncode == 0, done.stderr
+    assert "cpu_pct" not in done.stdout
+    raw = needs.parse_raw(collect.sections(done.stdout))
+    assert abs(raw.now - began) < 5
+    assert [a["agent_status"] for a in raw.agents] == ["idle", "blocked"]
+    assert raw.workspaces == {"w1": (5, "api")}
+    assert raw.tabs == {"w1:t3": (18, "review")}
+    assert raw.requests == []
+    assert calls.read_text().splitlines() == [
+        "agent list", "workspace list", "tab list"]
+
+
+def test_sections_split_only_at_whole_marker_lines():
+    parts = collect.sections(
+        "now=5\nos=Linux\n--agents--\n{}\n--tabs--\nx --plugin-- y\n")
+    assert parts == {"facts": "now=5\nos=Linux", "agents": "{}",
+                     "tabs": "x --plugin-- y"}
+
+
+def test_the_default_script_is_the_full_collector_script():
+    assert collect.script() == collect.COLLECT_SCRIPT
+    assert collect.WORKSPACES_MARKER in collect.COLLECT_SCRIPT
+    assert collect.REQUESTS_MARKER not in collect.COLLECT_SCRIPT
+
+
+def test_a_light_collect_gives_a_row_with_needs_and_no_snapshot():
+    out = ("now=100\n--agents--\n" + AGENT_LIST + "\n--workspaces--\n"
+           + WORKSPACE_LIST + "\n--tabs--\n" + TAB_LIST + "\n")
+    run = Runner(out)
+    row = collect.collect(machine(), run, stats=False)
+    assert run.calls == [(machine().target, collect.script(stats=False))]
+    assert row.snapshot is None and row.error is None
+    assert row.needs.now == 100 and len(row.needs.agents) == 2
+
+
+def test_a_full_collect_also_gives_needs():
+    row = collect.collect(machine(), Runner(SNAPSHOT))
+    assert row.snapshot is not None
+    assert row.needs.agents is not None
 
 
 def test_collect_polls_the_machines_target_with_the_collector_script():

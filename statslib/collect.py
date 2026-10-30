@@ -1,7 +1,8 @@
 """Machine stats: one row of live stats per machine Herdr knows about.
 
 Everything here is read-only. A machine is polled with one SSH call that
-prints a few facts about the host, the output of ``herdr agent list`` and
+prints a few facts about the host, the host's clock, the output of
+``herdr agent list``, ``herdr workspace list`` and ``herdr tab list`` and
 this plugin's entry in ``herdr plugin list``; nothing is installed on,
 written to, or sent to the machines.
 """
@@ -12,7 +13,7 @@ import subprocess
 import threading
 from collections import namedtuple
 
-from statslib import PLUGIN_ID, herdr
+from statslib import PLUGIN_ID, herdr, needs
 
 Machine = namedtuple("Machine", "label target enabled")
 Snapshot = namedtuple(
@@ -20,50 +21,92 @@ Snapshot = namedtuple(
     "os ncpu load cpu_pct mem_pct mem_used_kb mem_total_kb"
     " disk_pct disk_used_kb disk_total_kb agents plugin",
 )
-# One dashboard row: a snapshot, or the reason there is none.
-Row = namedtuple("Row", "label snapshot error")
+# One dashboard row: a snapshot (None in a light poll or when the host
+# could not be read), the reason there is none, and the host's needs
+# data (needs.Raw; None when it could not be read).
+Row = namedtuple("Row", "label snapshot error needs", defaults=(None,))
 
 AGENTS_MARKER = "--agents--"
 PLUGIN_MARKER = "--plugin--"
 
-# POSIX sh, run on every host (Linux and macOS) through ``sh -c``. Prints
-# the facts parse_snapshot reads, then Herdr's agent list and this plugin's
-# entry in its plugin list, each after its marker.
-COLLECT_SCRIPT = f"""\
-PATH=$PATH:/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin
+# POSIX sh, run on every host (Linux and macOS) through ``sh -c``. The
+# part that measures the host; the facts parse_snapshot reads.
+STATS_SCRIPT = """\
 os=$(uname -s)
 echo "os=$os"
 if [ "$os" = Darwin ]; then
   echo "ncpu=$(sysctl -n hw.ncpu)"
-  echo "load=$(sysctl -n vm.loadavg | awk '{{print $2}}')"
-  top -l 2 -n 0 -s 1 | awk '/CPU usage/ {{idle=$7}} \
-END {{printf "cpu_pct=%d\\n", 100 - idle + 0.5}}'
+  echo "load=$(sysctl -n vm.loadavg | awk '{print $2}')"
+  top -l 2 -n 0 -s 1 | awk '/CPU usage/ {idle=$7} \
+END {printf "cpu_pct=%d\\n", 100 - idle + 0.5}'
   echo "mem_total_kb=$(( $(sysctl -n hw.memsize) / 1024 ))"
-  vm_stat | awk '/page size of/ {{ps=$8}} /Pages free/ {{n+=$3}} \
-/Pages inactive/ {{n+=$3}} /Pages speculative/ {{n+=$3}} \
-END {{printf "mem_avail_kb=%d\\n", n*ps/1024}}'
+  vm_stat | awk '/page size of/ {ps=$8} /Pages free/ {n+=$3} \
+/Pages inactive/ {n+=$3} /Pages speculative/ {n+=$3} \
+END {printf "mem_avail_kb=%d\\n", n*ps/1024}'
 else
   echo "ncpu=$(nproc)"
   echo "load=$(cut -d' ' -f1 /proc/loadavg)"
   # printf, not print: mawk writes large counters as 9.67e+09.
-  cpu() {{
-    awk '/^cpu / {{printf "%.0f %.0f\\n", $2+$3+$4+$5+$6+$7+$8+$9, $5+$6}}' \\
+  cpu() {
+    awk '/^cpu / {printf "%.0f %.0f\\n", $2+$3+$4+$5+$6+$7+$8+$9, $5+$6}' \\
       /proc/stat
-  }}
+  }
   set -- $(cpu); total=$1 idle=$2; sleep 0.5; set -- $(cpu)
   busy=$(( ($1 - total) - ($2 - idle) )); span=$(( $1 - total ))
   [ "$span" -gt 0 ] || span=1
   echo "cpu_pct=$(( (100 * busy + span / 2) / span ))"
-  awk '/^MemTotal:/ {{print "mem_total_kb=" $2}} \
-/^MemAvailable:/ {{print "mem_avail_kb=" $2}}' /proc/meminfo
+  awk '/^MemTotal:/ {print "mem_total_kb=" $2} \
+/^MemAvailable:/ {print "mem_avail_kb=" $2}' /proc/meminfo
 fi
-df -Pk "$HOME" | awk 'NR==2 {{print "disk_total_kb=" $2; \
-print "disk_used_kb=" $3; gsub("%", "", $5); print "disk_pct=" $5}}'
-echo {AGENTS_MARKER}
-{herdr.AGENT_LIST_SHELL}
-echo {PLUGIN_MARKER}
-{herdr.plugin_list_shell(PLUGIN_ID)}
+df -Pk "$HOME" | awk 'NR==2 {print "disk_total_kb=" $2; \
+print "disk_used_kb=" $3; gsub("%", "", $5); print "disk_pct=" $5}'
 """
+
+PATH_LINE = "PATH=$PATH:/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin"
+WORKSPACES_MARKER = "--workspaces--"
+TABS_MARKER = "--tabs--"
+REQUESTS_MARKER = "--requests--"
+MARKERS = {AGENTS_MARKER: "agents", WORKSPACES_MARKER: "workspaces",
+           TABS_MARKER: "tabs", REQUESTS_MARKER: "requests",
+           PLUGIN_MARKER: "plugin"}
+
+
+def script(stats=True, request_dir=""):
+    """The collector: the host's clock, then (with ``stats``) the facts
+    parse_snapshot reads, Herdr's agent, workspace and tab lists, the
+    open secret requests when ``request_dir`` names their directory,
+    and (with ``stats``) this plugin's entry in the plugin list, each
+    after its marker. POSIX sh, for Linux and macOS."""
+    lines = [PATH_LINE, 'echo "now=$(date +%s)"']
+    if stats:
+        lines.append(STATS_SCRIPT)
+    # "echo;" first: a herdr answer without a final newline must not
+    # put the next marker on its line.
+    lines += [f"echo; echo {AGENTS_MARKER}", herdr.AGENT_LIST_SHELL,
+              f"echo; echo {WORKSPACES_MARKER}",
+              herdr.WORKSPACE_LIST_SHELL,
+              f"echo; echo {TABS_MARKER}", herdr.TAB_LIST_SHELL]
+    if stats:
+        lines += [f"echo; echo {PLUGIN_MARKER}",
+                  herdr.plugin_list_shell(PLUGIN_ID)]
+    return "\n".join(lines) + "\n"
+
+
+COLLECT_SCRIPT = script()
+
+
+def sections(text):
+    """The parts of collector output: ``facts`` before the first marker,
+    then one entry per marker line found (agents, workspaces, ...)."""
+    parts, name, lines = {}, "facts", []
+    for line in text.splitlines():
+        if line.strip() in MARKERS:
+            parts[name] = "\n".join(lines)
+            name, lines = MARKERS[line.strip()], []
+        else:
+            lines.append(line)
+    parts[name] = "\n".join(lines)
+    return parts
 
 
 def parse_machines(text):
@@ -96,8 +139,10 @@ def parse_snapshot(text):
     a non-numeric one raises ValueError; the agent counts are None when
     Herdr gave no usable list.
     """
-    facts_text, _, rest = text.partition(AGENTS_MARKER)
-    agents_text, _, plugin_text = rest.partition(PLUGIN_MARKER)
+    parts = sections(text)
+    facts_text = parts.get("facts", "")
+    agents_text = parts.get("agents", "")
+    plugin_text = parts.get("plugin", "")
     facts = dict(
         line.split("=", 1) for line in facts_text.splitlines() if "=" in line
     )
@@ -193,21 +238,26 @@ def run_host(target, script, timeout=15):
     return done.stdout
 
 
-def collect(machine, run=None):
-    """One row for ``machine``; a failure becomes the row's error."""
+def collect(machine, run=None, stats=True, request_dir=""):
+    """One row for ``machine``; a failure becomes the row's error.
+
+    Without ``stats`` (the popup's light poll) the row has needs data
+    and no snapshot.
+    """
     run = run or run_host
     if not machine.enabled:
         return Row(machine.label, None, "disabled")
     try:
-        snap = parse_snapshot(run(machine.target, COLLECT_SCRIPT))
+        text = run(machine.target, script(stats, request_dir))
+        snap = parse_snapshot(text) if stats else None
     except HostError as exc:
         return Row(machine.label, None, str(exc))
     except ValueError as exc:
         return Row(machine.label, None, f"unreadable output: {exc}")
-    return Row(machine.label, snap, None)
+    return Row(machine.label, snap, None, needs.parse_raw(sections(text)))
 
 
-def poll(local_label, machines, run=None):
+def poll(local_label, machines, run=None, stats=True, request_dir=""):
     """Rows for this machine (first) and every saved machine, in order.
 
     All hosts are read at once, so one slow host costs its own timeout
@@ -217,7 +267,7 @@ def poll(local_label, machines, run=None):
     rows = [None] * len(every)
 
     def read(i, machine):
-        rows[i] = collect(machine, run)
+        rows[i] = collect(machine, run, stats, request_dir)
 
     # Daemon threads, so quitting never waits for a hung host's timeout.
     threads = [threading.Thread(target=read, args=(i, m), daemon=True)
