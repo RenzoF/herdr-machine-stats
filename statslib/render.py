@@ -19,6 +19,10 @@ AGENT_MARKS = (
     ("idle", "○", "dim"),
     ("done", "✓", "blue"),
 )
+SECRET_MARK = ("secret", "🔑", "yellow")
+# The one status legend: the cards, the needs-you list, the popup and
+# the README all use these marks.
+LEGEND = (*AGENT_MARKS, SECRET_MARK)
 NOTE_STYLES = {"current": "green", "older": "yellow", "newer": "blue",
                "missing": "yellow", "unknown": "dim"}
 

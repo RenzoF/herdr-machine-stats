@@ -379,3 +379,10 @@ def test_without_a_lease_the_line_says_so():
         view(level="attention", verdict="! 1 job failed",
              last_lease=None), 50)
     assert "! no lease yet  1 job failed" in text(lines[5])
+
+
+def test_one_legend_serves_cards_list_and_popup():
+    from statslib import render
+    assert [(s, m) for s, m, _ in render.LEGEND] == [
+        ("blocked", "◐"), ("working", "●"), ("idle", "○"),
+        ("done", "✓"), ("secret", "🔑")]
