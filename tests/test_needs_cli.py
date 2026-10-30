@@ -2,11 +2,14 @@
 
 import json
 import os
+import subprocess
+import sys
+import tomllib
 from pathlib import Path
 
 import pytest
 
-from statslib import collect, jump
+from statslib import collect, jump, seen
 from statslib.needs import Item, Where
 from test_cli import Screen, shim, wait_until  # noqa: F401
 
@@ -177,3 +180,69 @@ def test_enter_on_a_remote_item_focuses_it_there_and_says_where(fleet):
         screen.press("!")
     finally:
         assert screen.quit() == 0
+
+
+def test_the_popup_jumps_to_a_local_pane_and_closes(fleet):
+    env, local, _remote = fleet
+    screen = Screen(env, "--needs")
+    assert screen.wait_for("builder")
+    screen.press("\r")
+    _, status = os.waitpid(screen.pid, 0)
+    os.close(screen.fd)
+    assert os.waitstatus_to_exitcode(status) == 0
+    assert "agent focus w1:p2" in local.read_text()
+
+
+def test_the_popup_says_where_a_remote_pane_is_and_stays_open(fleet):
+    env, _local, remote = fleet
+    screen = Screen(env, "--needs")
+    try:
+        assert screen.wait_for("codex")
+        screen.press("j")
+        screen.press("\r")
+        assert screen.wait_for("Pick laptop with prefix+w")
+        assert "agent focus w9:p1" in remote.read_text()
+    finally:
+        assert screen.quit() == 0
+
+
+def test_the_popup_shows_the_last_list_at_once(tmp_path):
+    env, _local, _remote = make_fleet(tmp_path, delay=3)
+    seen.Store(Path(env["HERDR_PLUGIN_STATE_DIR"])).save_list([Item(
+        "done", 0, "laptop", "me@laptop.example", "w9:p7", 1,
+        "old-agent", "old", None, (), None, 1000.0, False,
+        ("laptop", "w9:p7"))], 1000.0)
+    screen = Screen(env, "--needs")
+    try:
+        # At most 12 cells: the wide layout caps the agent column.
+        assert screen.wait_for("old-agent", secs=2)
+        assert screen.wait_for("as of")
+    finally:
+        assert screen.quit() == 0
+
+
+def test_once_needs_prints_the_list_as_plain_text(fleet):
+    env, _local, _remote = fleet
+    done = subprocess.run(
+        [sys.executable, str(ROOT / "bin" / "machine-stats"), "--once",
+         "--needs"], env=env, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    lines = done.stdout.splitlines()
+    assert lines[0] == "waiting on you (2)"
+    assert "builder" in lines[1]
+    assert "workspace 5 api, tab 18 'review'" in lines[1]
+    assert "    │ Do you want to proceed?" in lines
+    assert any("codex" in line and "laptop" in line for line in lines)
+    assert "cpu" not in done.stdout.lower()
+
+
+def test_the_manifest_opens_the_list_as_a_popup():
+    with open(ROOT / "herdr-plugin.toml", "rb") as f:
+        manifest = tomllib.load(f)
+    [pane] = [p for p in manifest["panes"] if p["id"] == "needs"]
+    assert pane["placement"] == "popup"
+    assert pane["command"] == ["python3", "bin/machine-stats", "--needs"]
+    [action] = [a for a in manifest["actions"] if a["id"] == "needs"]
+    command = action["command"]
+    assert command[command.index("--entrypoint") + 1] == "needs"
+    assert command[command.index("--placement") + 1] == "popup"

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Live stats for this machine and every machine Herdr has saved.
 
-machine-stats [--interval SECONDS] [--once] [--deploy MODE]
+machine-stats [--interval SECONDS] [--once] [--needs] [--deploy MODE]
               [--pipeline URL]
 
 One card per machine: CPU, memory and disk gauges, a CPU history
@@ -14,6 +14,7 @@ table and exits. Reads are read-only; the only thing ever installed on
 another machine is this plugin, by a deploy you turned on (--deploy or
 config.toml; the default is off). With a dispatcher URL (--pipeline or
 pipeline_url in config.toml) one more read-only card shows that pipeline.
+--needs shows only the needs-you list (the popup); with --once it prints it.
 """
 import argparse
 import contextlib
@@ -393,6 +394,61 @@ def dashboard(screen, interval, mode, mode_note, url="", excluded=(),
             screen.clear()
 
 
+POPUP_KEYS = " ↑↓ select  Enter jump  r refresh  q close"
+
+
+def popup(screen, interval, request_dir, store):
+    """The popup: the full list only. Enter on this machine's pane
+    focuses it and closes; on another machine's it says where it is."""
+    styles = start_colors()
+    screen.timeout(250)
+    cached, as_of = store.load_list()
+    poller = Poller(interval, request_dir=request_dir, store=store,
+                    light=True)
+    pick, top, message = 0, 0, None
+    while True:
+        items, notes = poller.needs()
+        title = " needs you"
+        if items is None:  # before the first poll: the last list kept
+            items, notes = cached, []
+            title += (time.strftime("  as of %H:%M:%S",
+                                    time.localtime(as_of))
+                      if as_of else "  polling...")
+        pick = render.step(pick, 0, max(len(items), 1))
+        top = draw_list(screen, styles, title, items, notes, pick, top,
+                        message or POPUP_KEYS)
+        key = screen.getch()
+        if key == -1:
+            continue
+        message = None  # where a remote pane is stays until a key
+        if key in (ord("q"), 27):
+            return
+        if key == ord("r"):
+            poller.refresh()
+        elif key in ENTER_KEYS and items:
+            landed, message = jump.jump(items[pick])
+            if landed:
+                return
+            poller.refresh()
+        else:
+            pick = list_step(key, pick, len(items))
+
+
+def print_needs(request_dir, store, interval):
+    """``--once --needs``: one light poll, the list as plain text."""
+    found, note = load_machines()
+    if note:
+        print(note, file=sys.stderr)
+    rows = collect.poll(socket.gethostname(), found, stats=False,
+                        request_dir=request_dir)
+    targets = [None, *(m.target for m in found)]
+    items, notes = gather_needs(rows, targets, store,
+                                needs.Screens(collect.read_screens),
+                                interval)
+    for line in needsview.plain(items, notes, time.time()):
+        print(line)
+
+
 def notes_for(row, is_here, version, deployer, polled=None, excluded=()):
     """The plugin line for one card; this machine is always current.
 
@@ -455,10 +511,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="machine-stats",
         description="Live stats for every Herdr machine.")
-    parser.add_argument("--interval", type=float, default=10,
-                        help="seconds between polls (default 10)")
+    parser.add_argument("--interval", type=float, default=None,
+                        help="seconds between polls (default 10; 5 with "
+                        "--needs)")
     parser.add_argument("--once", action="store_true",
                         help="print the table once and exit")
+    parser.add_argument("--needs", action="store_true",
+                        help="only the needs-you list: the popup, or "
+                        "with --once a plain list")
     parser.add_argument("--deploy", choices=config.MODES,
                         help="deploy mode for this run (default: config)")
     parser.add_argument("--pipeline", metavar="URL",
@@ -466,8 +526,21 @@ def main(argv=None):
                         "card (default: pipeline_url in config; '' for "
                         "none)")
     args = parser.parse_args(argv)
-    if args.interval < 1:
+    interval = args.interval
+    if interval is None:
+        interval = 5 if args.needs else 10
+    if interval < 1:
         parser.error("--interval must be at least 1 second")
+    request_dir, request_note = secret_request_dir()
+    store = seen.Store(seen.state_dir(os.environ))
+    if args.needs:
+        if request_note:
+            print(request_note, file=sys.stderr)
+        if args.once:
+            print_needs(request_dir, store, interval)
+        else:
+            curses.wrapper(popup, interval, request_dir, store)
+        return 0
     if args.once:
         found, note = load_machines()
         if note:
@@ -480,9 +553,7 @@ def main(argv=None):
     excluded, forced, exclude_note = deploy_excluded()
     mode = forced or mode
     url, url_note = pipeline_url(args.pipeline)
-    request_dir, request_note = secret_request_dir()
-    store = seen.Store(seen.state_dir(os.environ))
-    curses.wrapper(dashboard, args.interval, mode,
+    curses.wrapper(dashboard, interval, mode,
                    join_notes(mode_note, exclude_note, url_note,
                               request_note), url, excluded, request_dir,
                    store)

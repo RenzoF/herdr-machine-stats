@@ -13,9 +13,26 @@ placement = "zoomed"
 command = ["python3", "bin/machine-stats"]
 platforms = ["linux", "macos"]
 
+# What waits on you, on every machine: a popup over whatever you do.
+[[panes]]
+id = "needs"
+title = "needs you"
+placement = "popup"
+width = "90%"
+height = "80%"
+command = ["python3", "bin/machine-stats", "--needs"]
+platforms = ["linux", "macos"]
+
 [[actions]]
 id = "open"
 title = "Open machine stats"
 contexts = ["workspace"]
 command = ["herdr", "plugin", "pane", "open", "--plugin", "renzof.herdr-machine-stats", "--entrypoint", "dashboard", "--placement", "zoomed", "--focus"]
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "needs"
+title = "Show what needs you"
+contexts = ["workspace"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "renzof.herdr-machine-stats", "--entrypoint", "needs", "--placement", "popup", "--focus"]
 platforms = ["linux", "macos"]
