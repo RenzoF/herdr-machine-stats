@@ -699,3 +699,31 @@ def test_config_dir_refuses_empty_output_instead_of_the_current_directory(
     monkeypatch.setenv("HERDR_BIN", str(shim))
     with pytest.raises(herdr.HerdrError, match="printed nothing"):
         herdr.config_dir("x.y")
+
+
+ESCAPED = "\x1b[2J\x1b]0;pwned\x07boom \x1b[31mred\x1b[0m"
+
+
+def test_a_failure_reason_carries_no_escape_sequence():
+    reason = collect.failure_reason(1, ESCAPED + "\n")
+    assert reason == "remote error: boom red"
+    assert collect.failure_reason(255, ESCAPED) == "boom red"
+    assert collect.failure_reason(127, ESCAPED, remote=False).startswith(
+        "error: ")
+    assert "\x1b" not in collect.failure_reason(127, ESCAPED)
+
+
+def test_a_host_error_never_holds_an_escape_sequence():
+    assert str(collect.HostError(ESCAPED)) == "boom red"
+
+
+def test_a_down_machine_note_is_clean_in_the_list_and_on_stdout():
+    from statslib import needs, needsview
+    row = collect.Row("lab", None, ESCAPED, None)
+    _items, notes = needs.build([row], [None], 2000)
+    assert notes == [needs.Note("lab", "down: boom red")]
+    out = "\n".join(needsview.plain([], notes, 2000))
+    assert "\x1b" not in out
+    drawn = "".join(t for t, _s in needsview.section([], notes, 60, 40,
+                                                     2000)[-1])
+    assert "\x1b" not in drawn

@@ -150,7 +150,8 @@ def build(rows, targets, poll_time):
             continue
         raw = row.needs
         if raw is None or raw.agents is None:
-            reason = f"down: {row.error}" if row.error else "no herdr"
+            reason = (f"down: {text.clean(row.error)}" if row.error
+                      else "no herdr")
             notes.append(Note(row.label, reason))
             continue
         items += _machine_items(rank, row.label, target, raw, poll_time)

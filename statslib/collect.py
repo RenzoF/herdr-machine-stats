@@ -13,7 +13,7 @@ import subprocess
 import threading
 from collections import namedtuple
 
-from statslib import PLUGIN_ID, herdr, needs, prompts
+from statslib import PLUGIN_ID, herdr, needs, prompts, text
 
 Machine = namedtuple("Machine", "label target enabled")
 Snapshot = namedtuple(
@@ -174,7 +174,11 @@ def parse_snapshot(text):
 
 
 class HostError(RuntimeError):
-    """A host could not be read. The message is the reason to show."""
+    """A host could not be read. The message is the reason to show, and
+    holds no escape sequence."""
+
+    def __init__(self, reason=""):
+        super().__init__(text.clean(str(reason)))
 
 
 # What ssh prints when it never reached the remote shell (it then exits
@@ -203,7 +207,8 @@ def failure_reason(code, stderr, remote=True):
     stderr. An ssh message this does not know is shown as ssh wrote it.
     """
     lines = stderr.strip().splitlines()
-    first = lines[0] if lines else f"exit {code}"
+    # Remote text: no escape sequence may reach the screen or stdout.
+    first = text.clean(lines[0] if lines else "") or f"exit {code}"
     if remote and code == 255:
         for reason, needles in SSH_FAILURES:
             if any(n in stderr for n in needles):
@@ -212,7 +217,7 @@ def failure_reason(code, stderr, remote=True):
     where = "remote error" if remote else "error"
     if code == 127:
         found = [m for p in NOT_FOUND if (m := p.search(stderr))]
-        name = found[0].group(1) if found else "command"
+        name = text.clean(found[0].group(1)) if found else "command"
         return f"{where}: {name} not found"
     return f"{where}: {first}"
 
