@@ -45,10 +45,14 @@ Where = namedtuple("Where", "workspace workspace_label tab tab_label")
 Item = namedtuple(
     "Item", "group rank machine target pane_id seq agent project where"
     " detail deadline first_seen approx key screen", defaults=(False,))
-# The agent kinds Herdr reports for coding agents whose screens are read.
+# The agent kinds Herdr can start, so the ones it reports for coding
+# agents whose screens are read: the list in `herdr agent start --help`
+# of Herdr 0.9.5. Any other kind shows labels and title only.
 CODING_AGENTS = frozenset({
-    "claude", "codex", "gemini", "opencode", "pi", "amp", "droid",
-    "cursor", "copilot", "qwen", "kimi", "aider", "goose"})
+    "pi", "claude", "codex", "gemini", "cursor", "devin", "agy", "cline",
+    "omp", "mastracode", "opencode", "copilot", "kimi", "kiro", "droid",
+    "amp", "grok", "hermes", "kilo", "qodercli", "qwen", "letta", "maki",
+    "muse"})
 # A machine whose agents could not be asked, and why.
 Note = namedtuple("Note", "machine reason")
 LAST = 1 << 30  # sorts an unknown workspace or tab number last

@@ -218,3 +218,12 @@ def test_a_request_being_written_has_no_expiry_to_show():
         [row("laptop", raw([agent("w1:p1", "working")], [request]))],
         [None], 2000)
     assert items[0].deadline is None and items[0].detail == ("why",)
+
+
+def test_coding_agents_are_the_kinds_herdr_0_9_5_can_start():
+    # `herdr agent start --help` of Herdr 0.9.5.
+    assert needs.CODING_AGENTS == {
+        "pi", "claude", "codex", "gemini", "cursor", "devin", "agy",
+        "cline", "omp", "mastracode", "opencode", "copilot", "kimi",
+        "kiro", "droid", "amp", "grok", "hermes", "kilo", "qodercli",
+        "qwen", "letta", "maki", "muse"}
