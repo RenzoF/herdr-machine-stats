@@ -727,3 +727,23 @@ def test_a_down_machine_note_is_clean_in_the_list_and_on_stdout():
     drawn = "".join(t for t, _s in needsview.section([], notes, 60, 40,
                                                      2000)[-1])
     assert "\x1b" not in drawn
+
+
+def test_the_light_script_keeps_the_agents_when_its_last_herdr_call_fails(
+        tmp_path):
+    write_shim(tmp_path, "herdr", (
+        'case "$1 $2" in\n'
+        f"  'agent list') echo '{AGENT_LIST}';;\n"
+        "  *) echo 'no such list' >&2; exit 3;;\n"
+        "esac\n"))
+    env = dict(os.environ, PATH=f"{tmp_path}{os.pathsep}"
+               f"{os.environ['PATH']}")
+    for stats in (False, True):
+        done = subprocess.run(["sh", "-c", collect.script(stats)], env=env,
+                              capture_output=True, text=True, timeout=30)
+        assert done.returncode == 0, done.stderr
+        row = collect.collect(
+            machine(), lambda target, script: done.stdout, stats=False)
+        assert row.error is None
+        assert len(row.needs.agents) == 2
+        assert row.needs.workspaces is None and row.needs.tabs is None

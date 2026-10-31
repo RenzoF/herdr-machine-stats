@@ -92,6 +92,9 @@ def script(stats=True, request_dir=""):
     if stats:
         lines += [f"echo; echo {PLUGIN_MARKER}",
                   herdr.plugin_list_shell(PLUGIN_ID)]
+    # The last command's failure (an old Herdr without `tab list`) must
+    # not make the host look down: the sections read before it are good.
+    lines.append("true")
     return "\n".join(lines) + "\n"
 
 
