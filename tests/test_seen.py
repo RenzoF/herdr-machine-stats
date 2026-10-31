@@ -3,6 +3,7 @@
 import json
 import stat
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -95,11 +96,19 @@ def test_a_missing_or_broken_list_is_empty(store):
     assert store.load_list() == ([], None)
 
 
-def test_two_processes_stamping_at_once_lose_nothing(tmp_path):
+def test_two_processes_stamping_at_once_lose_nothing(tmp_path,
+                                                     monkeypatch):
+    real = seen._read
+
+    def slow(path):
+        data = real(path)
+        time.sleep(0.2)  # both threads have read before either writes
+        return data
+    monkeypatch.setattr(seen, "_read", slow)
+
     def run(machine):
         mine = seen.Store(tmp_path / "state")
-        for n in range(30):
-            mine.stamp([item(machine=machine)], {machine}, 1000 + n, 10)
+        mine.stamp([item(machine=machine)], {machine}, 1000, 10)
     threads = [threading.Thread(target=run, args=(m,)) for m in "ab"]
     for thread in threads:
         thread.start()
