@@ -247,3 +247,23 @@ def test_the_manifest_opens_the_list_as_a_popup():
     command = action["command"]
     assert command[command.index("--entrypoint") + 1] == "needs"
     assert command[command.index("--placement") + 1] == "popup"
+
+
+def test_a_host_whose_agent_list_failed_keeps_its_first_seen_times(
+        tmp_path):
+    from test_cli import load_command
+    from statslib import collect, needs
+    command = load_command()
+    store = seen.Store(tmp_path / "state")
+    screens = needs.Screens(lambda target, panes: {})
+
+    def row(agents):
+        data = needs.Raw(1000, agents, {}, {}, [])
+        return collect.Row("laptop", None, None, data)
+    blocked = [{"pane_id": "w1:p1", "agent_status": "blocked",
+                "agent": "claude", "state_change_seq": 1}]
+    command.gather_needs([row(blocked)], [None], store, screens, 10)
+    first = json.loads(store.ages.read_text())["items"]
+    # Herdr answered, but its agent list was unusable: not an answer.
+    command.gather_needs([row(None)], [None], store, screens, 10)
+    assert json.loads(store.ages.read_text())["items"] == first

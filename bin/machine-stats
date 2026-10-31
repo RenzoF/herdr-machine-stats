@@ -107,7 +107,10 @@ def gather_needs(rows, targets, store, screens, interval):
     blocked screens read, ordered, and kept for the popup."""
     stamp = time.time()
     items, notes = needs.build(rows, targets, stamp)
-    answered = {row.label for row in rows if row.needs is not None}
+    # A host answered only if its agent list was usable: one that could
+    # not be listed keeps its first-seen times for the next hour.
+    answered = {row.label for row in rows
+                if row.needs is not None and row.needs.agents is not None}
     try:
         items = store.stamp(items, answered, stamp, interval)
     except OSError:  # no state dir: ages count from now, as lower bounds
