@@ -146,11 +146,14 @@ READ_MARKER = "--pane--"
 
 def read_shell(pane_ids):
     """Shell that prints each pane's visible screen as plain text, each
-    after a ``--pane-- <id>`` line. Reading never marks an agent seen."""
+    after a ``--pane-- <id>`` line; a pane that cannot be read prints
+    nothing. Reading never marks an agent seen."""
     return "\n".join(
-        f"echo {READ_MARKER} {shlex.quote(pane)}\n"
-        f"herdr agent read {shlex.quote(pane)} --source visible"
-        " --format text 2>/dev/null | tail -n 60"
+        f"if out=$(herdr agent read {shlex.quote(pane)} --source visible"
+        " --format text 2>/dev/null); then\n"
+        f"  echo {READ_MARKER} {shlex.quote(pane)}\n"
+        "  printf '%s\\n' \"$out\" | tail -n 60\n"
+        "fi"
         for pane in pane_ids)
 
 

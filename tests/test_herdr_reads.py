@@ -67,3 +67,16 @@ def test_focus_names_the_pane_here_and_in_a_remote_shell(fake_herdr,
     assert calls.read_text().splitlines() == ["agent focus w1:p2"]
     assert herdr.focus_shell("w1:p2") == "herdr agent focus w1:p2"
     assert herdr.focus_shell("a b") == "herdr agent focus 'a b'"
+
+
+def test_a_pane_whose_read_fails_has_no_screen_entry(tmp_path):
+    shim = tmp_path / "herdr"
+    shim.write_text('#!/bin/sh\n[ "$3" = w1:p2 ] && exit 1\n'
+                    'echo "screen of $3"\n')
+    shim.chmod(0o755)
+    env = dict(os.environ, PATH=f"{tmp_path}{os.pathsep}"
+               f"{os.environ['PATH']}")
+    out = subprocess.run(
+        ["sh", "-c", herdr.read_shell(["w1:p1", "w1:p2"])], env=env,
+        capture_output=True, text=True, timeout=20).stdout
+    assert herdr.screens(out) == {"w1:p1": ["screen of w1:p1"]}

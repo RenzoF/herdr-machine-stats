@@ -195,9 +195,12 @@ class Screens:
         for (machine, target), panes in wanted.items():
             read = self.read(target, panes)
             for item in blocked:
-                if item.machine == machine and item.pane_id in panes:
+                # A failed read, or a pane the host did not return, is
+                # not remembered: it is read again at the next poll.
+                if (item.machine == machine and item.pane_id in panes
+                        and item.pane_id in read):
                     self.lines[(machine, item.pane_id, item.seq)] = tuple(
-                        text.meaningful(read.get(item.pane_id, [])))
+                        text.meaningful(read[item.pane_id]))
         live = {(i.machine, i.pane_id, i.seq) for i in blocked}
         self.lines = {k: v for k, v in self.lines.items() if k in live}
         return [i._replace(detail=self.lines.get(

@@ -155,12 +155,24 @@ def test_screen_lines_are_read_once_per_wait_one_call_per_machine():
     assert reads.calls[-1] == ("me@laptop.example", ["w1:p1"])
 
 
-def test_a_failed_read_keeps_the_fallback_and_is_not_retried():
+def test_a_failed_read_keeps_the_fallback_and_is_retried_next_poll():
     reads = Reads({})
     screens = needs.Screens(reads)
     [item] = screens.fill([blocked("w1:p1", detail=("secret wanted",))])
     assert item.detail == ("secret wanted",)
-    screens.fill([blocked("w1:p1", detail=("secret wanted",))])
+    reads.screens["w1:p1"] = ["Proceed?"]  # the host answers this time
+    [item] = screens.fill([blocked("w1:p1", detail=("secret wanted",))])
+    assert len(reads.calls) == 2
+    assert item.detail == ("Proceed?",)
+    screens.fill([blocked("w1:p1")])
+    assert len(reads.calls) == 2  # read now: not again
+
+
+def test_a_pane_that_shows_nothing_is_read_once():
+    reads = Reads({"w1:p1": []})
+    screens = needs.Screens(reads)
+    screens.fill([blocked("w1:p1", detail=("title",))])
+    screens.fill([blocked("w1:p1", detail=("title",))])
     assert len(reads.calls) == 1
 
 
