@@ -199,21 +199,22 @@ def failure_reason(code, stderr, remote=True):
     """The short reason a read that exited ``code`` failed.
 
     Over SSH, exit 255 is ssh's own failure, sorted by its message; any
-    other code is the remote shell's. An ssh message this does not know
-    is shown as ssh wrote it (its first line).
+    other code is the remote shell's, shown with its first line of
+    stderr. An ssh message this does not know is shown as ssh wrote it.
     """
+    lines = stderr.strip().splitlines()
+    first = lines[0] if lines else f"exit {code}"
     if remote and code == 255:
         for reason, needles in SSH_FAILURES:
             if any(n in stderr for n in needles):
                 return reason
-        lines = stderr.strip().splitlines()
-        return lines[0] if lines else f"exit {code}"
+        return first
     where = "remote error" if remote else "error"
     if code == 127:
         found = [m for p in NOT_FOUND if (m := p.search(stderr))]
         name = found[0].group(1) if found else "command"
         return f"{where}: {name} not found"
-    return f"{where}: exit {code}"
+    return f"{where}: {first}"
 
 
 def run_host(target, script, timeout=15):

@@ -366,7 +366,9 @@ def test_run_host_names_the_command_this_machine_lacks():
     (127, "sh: 1: nproc: not found", "remote error: nproc not found"),
     (127, "zsh: command not found: sh", "remote error: sh not found"),
     (127, "", "remote error: command not found"),
-    (2, "awk: syntax error", "remote error: exit 2"),
+    (2, "awk: syntax error\nawk: bailing out",
+     "remote error: awk: syntax error"),
+    (1, "", "remote error: exit 1"),
 ])
 def test_a_failed_read_gets_one_short_reason(code, stderr, want):
     assert collect.failure_reason(code, stderr) == want
@@ -384,8 +386,21 @@ def test_an_unrecognised_ssh_failure_shows_ssh_s_own_words(
 
 def test_on_this_machine_there_is_no_ssh_and_nothing_is_remote():
     assert collect.failure_reason(
-        255, "Permission denied", remote=False) == "error: exit 255"
+        255, "Permission denied", remote=False) == "error: Permission denied"
     assert collect.failure_reason(1, "", remote=False) == "error: exit 1"
+    assert collect.failure_reason(
+        1, "awk: syntax error", remote=False) == "error: awk: syntax error"
+
+
+def test_a_failed_remote_focus_keeps_herdr_s_own_reason(tmp_path,
+                                                        monkeypatch):
+    write_shim(tmp_path, "ssh", (
+        'echo "error: no pane w1:p9" >&2\n'
+        "exit 1\n"))
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    with pytest.raises(collect.HostError) as err:
+        collect.run_host("me@10.0.0.9", "herdr agent focus w1:p9")
+    assert str(err.value) == "remote error: error: no pane w1:p9"
 
 
 def test_run_host_gives_up_on_a_hung_host(tmp_path, monkeypatch):

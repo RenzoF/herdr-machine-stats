@@ -20,9 +20,10 @@ machine.
 - **Down**: a down card, and its `--once` row, says why in a few words:
   `unresolved` (this machine cannot resolve the name), `auth refused`
   (the key was refused), `timeout`, `unreachable` (refused or no route),
-  or `remote error` (the host answered but the read failed; a missing
-  command is named, as in `remote error: nproc not found`). Anything
-  else shows ssh's own first line.
+  or `remote error` (the host answered but the read failed), followed
+  by the remote's first error line, or the missing command, as in
+  `remote error: nproc not found`. Anything else shows ssh's own first
+  line.
 - **Agents**: see "Status marks" below.
 - **Plugin line**: the last line of a card says whether this plugin is
   installed on that machine (see "Deploying to your machines").
