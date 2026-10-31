@@ -8,6 +8,7 @@ written to, or sent to the machines.
 """
 
 import re
+import secrets
 import shlex
 import subprocess
 import threading
@@ -254,9 +255,12 @@ def read_screens(target, panes, run=None):
     """{pane: screen lines} for ``panes`` on ``target`` (None: here), in
     one call; {} when the host cannot be read."""
     run = run or run_host
+    # A marker chosen per call: a screen cannot forge another pane's.
+    marker = f"--pane-{secrets.token_hex(8)}--"
     try:
         return herdr.screens(
-            run(target, PATH_LINE + "\n" + herdr.read_shell(panes)))
+            run(target, PATH_LINE + "\n" + herdr.read_shell(panes, marker)),
+            marker)
     except HostError:
         return {}
 

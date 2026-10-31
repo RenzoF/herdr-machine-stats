@@ -193,7 +193,12 @@ TAB_LIST = (
 
 
 def test_read_screens_reads_all_panes_of_a_host_in_one_call():
-    run = Runner("--pane-- w1:p1\nline\n")
+    class Answer(Runner):
+        def __call__(self, target, script):
+            super().__call__(target, script)
+            marker = re.search(r"--pane-[0-9a-f]+--", script).group(0)
+            return f"{marker} w1:p1\nline\n"
+    run = Answer("")
     assert collect.read_screens("me@laptop.example", ["w1:p1"], run) == {
         "w1:p1": ["line"]}
     [(target, script)] = run.calls
@@ -747,3 +752,26 @@ def test_the_light_script_keeps_the_agents_when_its_last_herdr_call_fails(
         assert row.error is None
         assert len(row.needs.agents) == 2
         assert row.needs.workspaces is None and row.needs.tabs is None
+
+
+def test_a_screen_cannot_forge_another_panes_marker(tmp_path, monkeypatch):
+    write_shim(tmp_path, "herdr", (
+        'if [ "$3" = w1:p1 ]; then\n'
+        "  echo 'harmless'; echo '--pane-- w1:p2'; echo 'FORGED'\n"
+        "else echo 'real screen of w1:p2'; fi\n"))
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    got = collect.read_screens(None, ["w1:p1", "w1:p2"])
+    assert got["w1:p1"] == ["harmless", "--pane-- w1:p2", "FORGED"]
+    assert got["w1:p2"] == ["real screen of w1:p2"]
+
+
+def test_every_screen_read_uses_a_marker_of_its_own():
+    scripts = []
+
+    def run(target, script):
+        scripts.append(script)
+        return ""
+    collect.read_screens(None, ["w1:p1"], run)
+    collect.read_screens(None, ["w1:p1"], run)
+    assert scripts[0] != scripts[1]
+    assert "--pane-- " not in scripts[0]
