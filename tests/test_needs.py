@@ -209,3 +209,12 @@ def test_a_prompt_pane_of_any_request_is_dropped_open_or_not():
     data = data._replace(prompt_panes=frozenset({"w1:p9"}))
     items, _ = needs.build([row("laptop", data)], [None], 2000)
     assert items == []
+
+
+def test_a_request_being_written_has_no_expiry_to_show():
+    request = prompts.Request("r-0123abcd", 880, None, "w1:p1", "w1",
+                              "why", "w1:p9")
+    items, _ = needs.build(
+        [row("laptop", raw([agent("w1:p1", "working")], [request]))],
+        [None], 2000)
+    assert items[0].deadline is None and items[0].detail == ("why",)

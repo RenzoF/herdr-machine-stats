@@ -135,7 +135,8 @@ def _machine_items(rank, machine, target, raw, poll_time):
             _where(raw, place.get("workspace_id", request.workspace_id),
                    place.get("tab_id")),
             tuple(filter(None, [text.clean(request.purpose)])),
-            request.deadline + shift, request.created + shift, False,
+            None if request.deadline is None else request.deadline + shift,
+            request.created + shift, False,
             (machine, request.id)))
     return items
 

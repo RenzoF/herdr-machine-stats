@@ -134,3 +134,8 @@ def test_plain_lists_each_group_for_scripts():
     assert out[2] == "    │ Do you want to make this edit to settings.py?"
     assert out[-1] == "? lab: down: timeout, not counted"
     assert needsview.plain([], [], NOW) == ["nothing needs you"]
+
+
+def test_a_secret_without_a_deadline_shows_its_purpose_only():
+    one = MIXED[1]._replace(deadline=None)
+    assert needsview.details(one) == ["deploy the example app"]

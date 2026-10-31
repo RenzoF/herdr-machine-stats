@@ -106,7 +106,9 @@ def test_a_fresh_state_file_moves_the_deadline(home, phase, age, listed):
         {"phase": phase, "deadline": now + 300, "at": now - age}))
     reqs = found(home)
     assert bool(reqs) is listed
-    if listed:
+    if listed and phase == "writing":
+        assert reqs[0].deadline is None
+    elif listed:
         assert abs(reqs[0].deadline - (now + 300)) < 1
 
 
@@ -216,3 +218,22 @@ def test_the_collector_hands_prompt_panes_to_the_needs_data(
                          timeout=30).stdout
     data = needs.parse_raw(collect.sections(out))
     assert data.requests == [] and data.prompt_panes == {"w1:p9"}
+
+
+def test_a_fresh_writing_state_has_no_deadline(home):
+    # The requesting side waits for the write however long it takes, so
+    # the request must not drop out of the list mid-write.
+    now = time.time()
+    rdir = make_request(state_base(home), expires=now - 1)
+    (rdir / "state.json").write_text(json.dumps(
+        {"phase": "writing", "deadline": now - 5, "at": now - 30}))
+    [req] = found(home)
+    assert req.deadline is None
+
+
+def test_a_typing_state_keeps_its_own_deadline(home):
+    now = time.time()
+    rdir = make_request(state_base(home), expires=now + 500)
+    (rdir / "state.json").write_text(json.dumps(
+        {"phase": "typing", "deadline": now + 300, "at": now - 10}))
+    assert abs(found(home)[0].deadline - (now + 300)) < 1

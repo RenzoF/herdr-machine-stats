@@ -21,8 +21,8 @@ OTHER_BYTES = 1024
 REQUEST, FILE, FLAGS = "--request--", "--file--", "--flags--"
 
 # Times are the host's epoch seconds. ``deadline`` is when the request
-# stops being open; ``prompt_pane`` is the prompt's pane, None until it
-# opened.
+# stops being open (None while its value is being written, which has no
+# limit); ``prompt_pane`` is the prompt's pane, None until it opened.
 Request = namedtuple(
     "Request", "id created deadline pane_id workspace_id purpose"
     " prompt_pane")
@@ -116,15 +116,17 @@ def _open(block, now):
     state = _object(block["files"].get("state"))
     if (state and isinstance(state.get("phase"), str)
             and finite(state.get("deadline")) and finite(state.get("at"))):
-        limit = WRITE_STALE if state["phase"] == "writing" else STALE
-        if now - state["at"] <= limit:
-            deadline = state["deadline"]
-    if now >= deadline:
+        writing = state["phase"] == "writing"
+        if now - state["at"] <= (WRITE_STALE if writing else STALE):
+            # The requester waits for a write however long it takes.
+            deadline = None if writing else state["deadline"]
+    if deadline is not None and now >= deadline:
         return None
     pane = _object(block["files"].get("pane"))
     prompt = pane.get("pane_id") if pane else None
-    return Request(block["id"], float(data["created"]), float(deadline),
-                   *texts, prompt if isinstance(prompt, str) else None)
+    return Request(block["id"], float(data["created"]),
+                   None if deadline is None else float(deadline), *texts,
+                   prompt if isinstance(prompt, str) else None)
 
 
 def panes(text):
