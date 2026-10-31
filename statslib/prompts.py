@@ -127,6 +127,19 @@ def _open(block, now):
                    *texts, prompt if isinstance(prompt, str) else None)
 
 
+def panes(text):
+    """The prompt panes named by every request directory in the scan,
+    open or not: a prompt pane outlives its request and may still be
+    listed by Herdr as an agent."""
+    found = set()
+    for block in _blocks(text):
+        pane = _object(block["files"].get("pane"))
+        prompt = pane.get("pane_id") if pane else None
+        if isinstance(prompt, str):
+            found.add(prompt)
+    return frozenset(found)
+
+
 def parse(text, now):
     """The open requests in ``scan_shell`` output at the host's ``now``,
     each once."""

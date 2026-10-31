@@ -11,8 +11,10 @@ from statslib import herdr, prompts, text
 
 # One host's needs data: its clock (epoch seconds, or None), the agent
 # list, {workspace_id: (number, label)}, {tab_id: (number, label)} and
-# its open secret requests.
-Raw = namedtuple("Raw", "now agents workspaces tabs requests")
+# its open secret requests, and the panes of every secret prompt there
+# (open request or not).
+Raw = namedtuple("Raw", "now agents workspaces tabs requests prompt_panes",
+                 defaults=(frozenset(),))
 
 
 def parse_raw(parts):
@@ -28,7 +30,8 @@ def parse_raw(parts):
                 if now is not None else [])
     return Raw(now, herdr.agents(parts.get("agents", "")),
                herdr.workspaces(parts.get("workspaces", "")),
-               herdr.tabs(parts.get("tabs", "")), requests)
+               herdr.tabs(parts.get("tabs", "")), requests,
+               prompts.panes(parts.get("requests", "")))
 
 
 GROUPS = ("blocked", "secret", "done")  # the order they are listed in
@@ -36,9 +39,16 @@ AGENT_GROUPS = ("blocked", "done")
 # The numbers and labels Herdr's screen shows; a number may be None.
 Where = namedtuple("Where", "workspace workspace_label tab tab_label")
 # One line of the list. Times are epoch seconds on this machine's clock.
+# ``screen``: the pane is a known coding agent, so its screen may be read
+# for the detail lines; any other pane (a secret prompt reports itself as
+# a blocked agent) shows its labels and title only (D7).
 Item = namedtuple(
     "Item", "group rank machine target pane_id seq agent project where"
-    " detail deadline first_seen approx key")
+    " detail deadline first_seen approx key screen", defaults=(False,))
+# The agent kinds Herdr reports for coding agents whose screens are read.
+CODING_AGENTS = frozenset({
+    "claude", "codex", "gemini", "opencode", "pi", "amp", "droid",
+    "cursor", "copilot", "qwen", "kimi", "aider", "goose"})
 # A machine whose agents could not be asked, and why.
 Note = namedtuple("Note", "machine reason")
 LAST = 1 << 30  # sorts an unknown workspace or tab number last
@@ -50,6 +60,11 @@ def _name(agent):
         if name:
             return name
     return "agent"
+
+
+def _kind(agent):
+    kind = agent.get("agent")
+    return kind.strip().lower() if isinstance(kind, str) else ""
 
 
 def _project(agent):
@@ -94,18 +109,20 @@ def _first_detail(agent, status):
 def _machine_items(rank, machine, target, raw, poll_time):
     panes = {a["pane_id"]: a for a in raw.agents
              if isinstance(a.get("pane_id"), str)}
-    prompts_open = {r.prompt_pane for r in raw.requests if r.prompt_pane}
+    prompt_panes = set(raw.prompt_panes)
+    prompt_panes.update(r.prompt_pane for r in raw.requests
+                        if r.prompt_pane)
     items = []
     for pane_id, agent in panes.items():
         status = agent.get("agent_status")
-        if status not in AGENT_GROUPS or pane_id in prompts_open:
+        if status not in AGENT_GROUPS or pane_id in prompt_panes:
             continue
         items.append(Item(
             status, rank, machine, target, pane_id, _seq(agent),
             _name(agent), _project(agent),
             _where(raw, agent.get("workspace_id"), agent.get("tab_id")),
             _first_detail(agent, status), None, None, False,
-            (machine, pane_id)))
+            (machine, pane_id), _kind(agent) in CODING_AGENTS))
     # Request times are the host's; move them onto this machine's clock.
     shift = poll_time - raw.now if raw.now is not None else 0
     for request in raw.requests:
@@ -168,7 +185,7 @@ class Screens:
         self.lines = {}
 
     def fill(self, items):
-        blocked = [i for i in items if i.group == "blocked"]
+        blocked = [i for i in items if i.group == "blocked" and i.screen]
         wanted = {}
         for item in blocked:
             if (item.machine, item.pane_id, item.seq) not in self.lines:
@@ -184,4 +201,4 @@ class Screens:
         self.lines = {k: v for k, v in self.lines.items() if k in live}
         return [i._replace(detail=self.lines.get(
                     (i.machine, i.pane_id, i.seq)) or i.detail)
-                if i.group == "blocked" else i for i in items]
+                if i.group == "blocked" and i.screen else i for i in items]

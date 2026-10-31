@@ -137,7 +137,7 @@ class Reads:
 def blocked(pane, seq=7, detail=()):
     return needs.Item("blocked", 0, "laptop", "me@laptop.example", pane,
                       seq, "claude", "api", None, detail, None, 1000, False,
-                      ("laptop", pane))
+                      ("laptop", pane), True)
 
 
 def test_screen_lines_are_read_once_per_wait_one_call_per_machine():
@@ -169,3 +169,31 @@ def test_only_blocked_agents_are_read():
     done = blocked("w1:p1")._replace(group="done", detail=("title",))
     assert needs.Screens(reads).fill([done]) == [done]
     assert reads.calls == []
+
+
+def test_a_blocked_pane_that_is_not_a_coding_agent_is_never_read():
+    # A prompt pane reports itself as a blocked agent of its own kind;
+    # its screen can show what is being asked for (D7).
+    rows = [row("b", raw([
+        agent("w1:p1", "blocked", agent="claude"),
+        agent("w1:p2", "blocked", agent="secret-prompt",
+              state_labels={"blocked": "secret wanted"}),
+        agent("w1:p3", "blocked", agent=None)]))]
+    items, _ = needs.build(rows, [None], 2000)
+    assert [(i.pane_id, i.screen) for i in items] == [
+        ("w1:p1", True), ("w1:p2", False), ("w1:p3", False)]
+    reads = Reads({p: ["TARGET-PATH and KEY-NAME"]
+                   for p in ("w1:p1", "w1:p2", "w1:p3")})
+    filled = needs.Screens(reads).fill(items)
+    assert reads.calls == [(None, ["w1:p1"])]
+    assert filled[1].detail == ("secret wanted",)
+    assert "TARGET-PATH" not in repr(filled[1:])
+
+
+def test_a_prompt_pane_of_any_request_is_dropped_open_or_not():
+    # An answered or cancelled request is not open, but its prompt pane
+    # may still be listed by Herdr as a blocked agent.
+    data = raw([agent("w1:p9", "blocked", agent="secret-prompt")])
+    data = data._replace(prompt_panes=frozenset({"w1:p9"}))
+    items, _ = needs.build([row("laptop", data)], [None], 2000)
+    assert items == []

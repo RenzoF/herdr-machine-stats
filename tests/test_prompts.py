@@ -181,3 +181,38 @@ def test_the_collector_reports_requests_only_when_asked(
     assert [r.id for r in raw(NAME).requests] == [RID]
     assert raw("").requests == []
     assert collect.REQUESTS_MARKER not in collect.script(False, "")
+
+
+@pytest.mark.parametrize("name", ["result.json", "cancel.json", None])
+def test_every_prompt_pane_is_reported_open_or_not(home, name):
+    rdir = make_request(state_base(home), expires=time.time() - 1)
+    (rdir / "pane.json").write_text('{"pane_id": "w1:p9"}')
+    if name:
+        (rdir / name).write_text('{"status": "stored"}')
+    assert found(home) == []
+    assert prompts.panes(scan(home)) == frozenset({"w1:p9"})
+
+
+def test_prompt_panes_come_only_from_well_formed_pane_files(home):
+    rdir = make_request(state_base(home))
+    (rdir / "pane.json").write_text('{"pane_id": 7}')
+    other = make_request(state_base(home), rid="r-11111111")
+    (other / "pane.json").write_text("not json")
+    assert prompts.panes(scan(home)) == frozenset()
+
+
+def test_the_collector_hands_prompt_panes_to_the_needs_data(
+        fake_herdr, home, monkeypatch):
+    shim, _calls, _canned = fake_herdr
+    rdir = make_request(state_base(home))
+    (rdir / "pane.json").write_text('{"pane_id": "w1:p9"}')
+    (rdir / "cancel.json").write_text("{}")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    env = dict(os.environ, PATH=f"{shim.parent}{os.pathsep}"
+               f"{os.environ['PATH']}")
+    out = subprocess.run(["sh", "-c", collect.script(False, NAME)],
+                         env=env, capture_output=True, text=True,
+                         timeout=30).stdout
+    data = needs.parse_raw(collect.sections(out))
+    assert data.requests == [] and data.prompt_panes == {"w1:p9"}

@@ -48,8 +48,9 @@ def make_fleet(tmp_path, delay=0):
         tmp_path / "local",
         listing("agents", {
             "pane_id": "w1:p2", "agent_status": "blocked",
-            "name": "builder", "cwd": "/src/api", "workspace_id": "w1",
-            "tab_id": "w1:t3", "state_change_seq": 4}),
+            "agent": "claude", "name": "builder", "cwd": "/src/api",
+            "workspace_id": "w1", "tab_id": "w1:t3",
+            "state_change_seq": 4}),
         {"workspace_id": "w1", "number": 5, "label": "api"},
         {"tab_id": "w1:t3", "workspace_id": "w1", "number": 18,
          "label": "review"},
