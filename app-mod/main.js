@@ -38,14 +38,14 @@ export default class MachineStats extends View {
     this.selected = 0;
     this.columns = 1;
     this.width = 0;
-    this.btops = 0; // btop launches and dialogs from this copy, still open
+    this.latest = null; // the last btop this copy launched, by name
     this.launching = new Map(); // name -> machine, while hc starts it
     this.handle = cx.focus_handle();
     this.handle.focus();
     // An overlay settles a moment after it opens; take the keyboard again,
     // unless a btop of ours is already starting or over this copy.
     cx.timer.after(600, () => {
-      if (!this.btops) this.handle.focus();
+      if (!this.latest) this.handle.focus();
     });
     this.poll(cx);
     cx.timer.every(POLL_MS, (cx) => this.poll(cx));
@@ -163,7 +163,7 @@ export default class MachineStats extends View {
     setShared(PENDING_KEY,
       [...pending, { machine: m.name, name, at: Date.now() }]);
     this.launching.set(name, m.name);
-    this.btops += 1;
+    this.latest = name;
     cx.spawn(async (cx) => {
       let result;
       try {
@@ -180,7 +180,7 @@ export default class MachineStats extends View {
         return;
       }
       if (!address) {
-        this.btops -= 1;
+        if (this.latest === name) this.handle.focus();
         setShared(PENDING_KEY, withoutLaunch(shared(PENDING_KEY), name));
         notify({ title: `btop on ${label}`, level: "error",
           body: hcErrorText(result.stderr) });
@@ -196,13 +196,13 @@ export default class MachineStats extends View {
       });
       // Take the keyboard back once btop is gone (q, or the dialog's ✕):
       // first see it live (the list may lag the start by a moment), then
-      // see it go.
+      // see it go. Only the latest launch does, so an older btop ending
+      // late never takes the keyboard from a newer one's dialog.
       const live = () => terminals().some((x) => x.address === address &&
         x.state === "live");
       for (let i = 0; i < 20 && !live(); i++) await cx.sleep(250);
       while (live()) await cx.sleep(500);
-      this.btops -= 1;
-      this.handle.focus();
+      if (this.latest === name) this.handle.focus();
       cx.notify();
     });
   }
