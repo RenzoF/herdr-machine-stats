@@ -162,6 +162,59 @@ pipeline_url = "http://dispatcher.example:8787/status"   # default "": no card
   used. The request ignores `http_proxy` and `https_proxy`. It is polled in the background at the same interval as the
   machines.
 
+## Herdr app mod
+
+`app-mod/` is the same dashboard for the Herdr desktop app (built on
+Herdr Core, `hc`): a native mod, not the curses program. It shows one card
+for this computer and one for each machine in `hc machine ls`, each with
+CPU (and a sparkline of recent samples), memory, disk, load and the
+machine's agents. Agents that need you are listed under their card;
+clicking one goes to it.
+
+- **Install**: link the folder into the app's mods as `machine-stats`
+  (the name matters: the btop dialog's title bar is this mod again):
+
+  ```bash
+  ln -s ~/GitHub/herdr-machine-stats/app-mod ~/.config/herdr-app/mods/machine-stats
+  herdr-app check ~/.config/herdr-app/mods/machine-stats
+  ```
+
+- **Open** it as a dialog with a key in `~/.config/herdr-app/keys.json`
+  (any free key; `ctrl-shift-m` is free in the default keys):
+
+  ```json
+  "global": { "ctrl-shift-m": "mod.open:machine-stats" }
+  ```
+
+  Pressing the key again closes it. To keep it open as a tab instead:
+  `herdr-app do tab.new --mod machine-stats --name Machines`.
+- **Keys**: arrows or h/j/k/l move between cards, Enter (or a double
+  click) opens btop on the selected machine, r reads every machine now, q
+  or Esc closes the dialog.
+- **btop** opens in a dialog over the app, running on that machine
+  through its core (`hc run --on`), not over SSH. q quits it, or ✕ closes
+  the dialog; either way the btop terminal ends and is removed. A machine
+  without btop says so for three seconds. If the dashboard closes while
+  btop is still starting, that btop is ended too: at once when it already
+  exists, otherwise by the next dashboard's first read once a minute has
+  passed. Launches still waiting for their dialog are the only thing the
+  mod stores (the app's shared state `machine-stats.pending`).
+- **Borders and dots**: the selected card has the accent border; yellow is
+  an alert (an agent needs you, or memory or disk above 90%); red is a
+  machine that could not be read, with the reason (`unknown machine`,
+  `timeout`, `unreachable`, `error: <cmd> not found`, or what the app
+  said).
+- **Reads**: every 10 seconds, one `sh -c` per machine through the app's
+  `exec` (herdr-core runs it there), each machine on its own so a slow one
+  only delays its own card. They are read-only. Agents come from the app's
+  own lists (`agents()`, and `terminals()` for sub-agents), not from the
+  machines. Opened as a dialog it reads only while open; as a tab it keeps
+  reading while the tab is hidden.
+- Not in the mod: deploy (the app reaches the other machines itself, so
+  there is nothing to install on them) and the pipeline card.
+- A linked folder is read when the dialog or tab opens; an edit shows the
+  next time it opens.
+
 ## Requirements
 
 - Python 3.11+ on the machine that runs the dashboard (standard library
@@ -177,3 +230,7 @@ pipeline_url = "http://dispatcher.example:8787/status"   # default "": no card
 ```bash
 uv run --with pytest --with flake8 python -m pytest -q
 ```
+
+This also runs the app mod's Node tests (`node --test tests/js/`, Node
+22+) and `herdr-app check` on the mod when `herdr-app` and a display are
+available.

@@ -1,0 +1,10 @@
+{
+  "place": "none",
+  "title": "Machine stats",
+  "focusable": true,
+  "overlay": {
+    "kind": "dialog",
+    "width": 0.82,
+    "height": 0.8
+  }
+}

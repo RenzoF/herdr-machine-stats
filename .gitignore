@@ -1,2 +1,4 @@
 __pycache__/
 .pytest_cache/
+app-mod/gpui-kit.d.ts
+app-mod/jsconfig.json
