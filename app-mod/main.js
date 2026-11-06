@@ -10,12 +10,13 @@ import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import {
   agents, terminals, machines, exec, hc, theme, settings, props, run,
-  openOverlay, closeOverlay, nextCommand, notify,
+  openOverlay, closeOverlay, nextCommand, notify, shared, setShared,
 } from "herdr";
 import {
-  MOD, POLL_MS, STATUS_ORDER, readMachine, btopArgs, runAddress,
-  hcErrorText, machineKey, agentsByMachine, cardLevel, band, sizeText,
-  pushHistory, columnsFor, step, ageText,
+  MOD, POLL_MS, STATUS_ORDER, readMachine, btopName, btopArgs, target,
+  runAddress, hcErrorText, PENDING_KEY, abandoned, withoutLaunch,
+  machineKey, agentsByMachine, cardLevel, band, sizeText, pushHistory,
+  columnsFor, step, ageText,
 } from "./stats.js";
 
 const GLYPH = { blocked: "◐", working: "●", idle: "○", done: "✓" };
@@ -27,17 +28,21 @@ export default class MachineStats extends View {
   init(_props, cx) {
     const p = props() ?? {};
     if (p.btop) {
+      // This dialog owns the terminal now: the launch is no longer pending.
       this.btop = p.btop;
+      setShared(PENDING_KEY, withoutLaunch(shared(PENDING_KEY), p.name));
       return;
     }
     this.reads = new Map(); // machine key -> {snapshot, error, at, history}
     this.selected = 0;
     this.columns = 1;
     this.width = 0;
+    this.btops = 0; // btop launches and dialogs from this copy, still open
+    this.launching = new Map(); // name -> machine, while hc starts it
     this.handle = cx.focus_handle();
-    this.handle.focus();
+    this.focusSelf();
     // An overlay settles a moment after it opens; take the keyboard again.
-    cx.timer.after(600, () => this.handle.focus());
+    cx.timer.after(600, () => this.focusSelf());
     this.poll(cx);
     cx.timer.every(POLL_MS, (cx) => this.poll(cx));
     cx.spawn(async (cx) => {
@@ -49,9 +54,41 @@ export default class MachineStats extends View {
     });
   }
 
-  // The btop terminal goes with its dialog, however that closes.
+  // The btop terminal goes with its dialog, however that closes. A
+  // dashboard closing while hc is still starting one ends it by name: no
+  // dialog will ever show it.
   async close() {
-    if (this.btop) await hc(["kill", this.btop]);
+    if (this.btop) {
+      await hc(["kill", this.btop]);
+      return;
+    }
+    this.closed = true;
+    await Promise.all([...(this.launching ?? [])].map(([name, machine]) =>
+      hc(["kill", target(machine, name)])));
+  }
+
+  // The keyboard, unless a btop of ours is (about to be) over this copy.
+  focusSelf() {
+    if (!this.btops) this.handle.focus();
+  }
+
+  // Ends launches that no dialog took over, then forgets them. close()
+  // tries first, but a remote terminal may not exist yet when it runs,
+  // and the app cancels the rest of the launch once the dashboard is gone.
+  sweep(cx) {
+    const old = abandoned(shared(PENDING_KEY), Date.now(), 60000);
+    if (!old.length || this.sweeping) return;
+    this.sweeping = true;
+    cx.spawn(async () => {
+      try {
+        for (const p of old) await hc(["kill", target(p.machine, p.name)]);
+        let left = shared(PENDING_KEY);
+        for (const p of old) left = withoutLaunch(left, p.name);
+        setShared(PENDING_KEY, left);
+      } finally {
+        this.sweeping = false;
+      }
+    });
   }
 
   // This computer first, then the others, as machines() orders them.
@@ -64,6 +101,7 @@ export default class MachineStats extends View {
   // One read per machine; a machine still answering the last one is left
   // alone, so a slow machine costs only its own card.
   poll(cx) {
+    this.sweep(cx);
     for (const m of this.list()) {
       const key = machineKey(m.name);
       const read = this.reads.get(key) ?? { history: [] };
@@ -88,7 +126,7 @@ export default class MachineStats extends View {
   // the app hands this copy the keyboard (after the btop dialog closes).
   command(command, cx) {
     const [name, arg] = command.split(":");
-    if (name === "focus") this.handle.focus();
+    if (name === "focus") this.focusSelf();
     else if (name === "refresh") this.poll(cx);
     else if (name === "btop") {
       const all = this.list();
@@ -110,15 +148,32 @@ export default class MachineStats extends View {
 
   openBtop(m, cx) {
     const label = this.label(m);
+    const name = btopName();
+    // Pending until its dialog's title bar takes it over (see sweep).
+    const pending = Array.isArray(shared(PENDING_KEY)) ? shared(PENDING_KEY)
+      : [];
+    setShared(PENDING_KEY,
+      [...pending, { machine: m.name, name, at: Date.now() }]);
+    this.launching.set(name, m.name);
+    this.btops += 1;
     cx.spawn(async (cx) => {
       let result;
       try {
-        result = await hc(btopArgs(m.name));
+        result = await hc(btopArgs(m.name, name));
       } catch (error) {
         result = { code: -1, stderr: String(error?.message ?? error) };
       }
+      this.launching.delete(name);
       const address = result.code === 0 ? runAddress(result.stdout) : null;
+      if (this.closed) {
+        // The dashboard went while hc was starting it (close() kills it by
+        // name too, which can come too early): show nothing, leave nothing.
+        if (address) await hc(["kill", address]);
+        return;
+      }
       if (!address) {
+        this.btops -= 1;
+        setShared(PENDING_KEY, withoutLaunch(shared(PENDING_KEY), name));
         notify({ title: `btop on ${label}`, level: "error",
           body: hcErrorText(result.stderr) });
         return;
@@ -126,8 +181,8 @@ export default class MachineStats extends View {
       openOverlay({
         kind: "dialog", width: 0.92, height: 0.9,
         layout: { type: "column", children: [
-          { type: "block", size: { px: 34 },
-            content: { mod: MOD, props: { btop: address, machine: label } } },
+          { type: "block", size: { px: 34 }, content: { mod: MOD,
+            props: { btop: address, name, machine: label } } },
           { type: "block", content: { terminal: address } },
         ] },
       });
@@ -138,7 +193,8 @@ export default class MachineStats extends View {
         x.state === "live");
       for (let i = 0; i < 20 && !live(); i++) await cx.sleep(250);
       while (live()) await cx.sleep(500);
-      this.handle.focus();
+      this.btops -= 1;
+      this.focusSelf();
       cx.notify();
     });
   }

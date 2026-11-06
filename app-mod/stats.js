@@ -53,24 +53,48 @@ df -Pk "$HOME" | awk 'NR==2 {print "disk_total_kb=" $2;
 // btop on the machine it runs on. A machine without btop says so for a few
 // seconds before the terminal (and the dialog showing it) closes. Over a
 // core connection there may be no UTF-8 locale, and btop refuses to start
-// without one, so C.UTF-8 is set when the current locale is not UTF-8.
+// without one, so one is set when the current locale is not UTF-8:
+// C.UTF-8 on Linux, en_US.UTF-8 on macOS (which has no C.UTF-8).
 export const BTOP_SCRIPT = String.raw`PATH=$PATH:/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin
 loc=$LANG; [ -n "$LC_CTYPE" ] && loc=$LC_CTYPE; [ -n "$LC_ALL" ] && loc=$LC_ALL
+utf=C.UTF-8; [ "$(uname -s)" = Darwin ] && utf=en_US.UTF-8
 case "$loc" in
   *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) ;;
-  *) export LANG=C.UTF-8; unset LC_ALL LC_CTYPE;;
+  *) export LANG=$utf; unset LC_ALL LC_CTYPE;;
 esac
 command -v btop >/dev/null && exec btop
 echo "btop is not installed on $(uname -n)"; sleep 3
 `;
 
+// A name for one btop terminal, unique enough among live terminals
+// (hc allows 1-32 of a-z 0-9 - _). Known before `hc run` returns, so a
+// launch can be ended by name even if its reply never arrives.
+export function btopName(random = Math.random) {
+  return `${MOD}-btop-${random().toString(36).slice(2, 8).padEnd(6, "0")}`;
+}
+
 // The `hc run` arguments that start btop on `machine` (null: this one).
 // No parent, so it belongs to nobody's tab; --rm, so it leaves nothing
-// behind once it exits; the label finds strays.
-export function btopArgs(machine) {
+// behind once it exits.
+export function btopArgs(machine, name) {
   const on = machine ? ["--on", machine] : [];
-  return ["run", "--bg", "--json", "--no-parent", "--rm",
+  return ["run", "--bg", "--json", "--no-parent", "--rm", "--name", name,
     "--label", `by=${MOD}`, ...on, "--", "sh", "-c", BTOP_SCRIPT];
+}
+
+// How hc names a terminal on `machine` (null: this one).
+export const target = (machine, name) => (machine ? `${machine}/${name}` : name);
+
+// Launches no btop dialog has taken over, as kept in shared state:
+// [{machine, name, at}]. Ones older than `ms` were abandoned (the
+// dashboard closed while hc was still starting them) and get killed.
+export const PENDING_KEY = `${MOD}.pending`;
+export function abandoned(pending, now, ms = 30000) {
+  return (Array.isArray(pending) ? pending : [])
+    .filter((p) => p && typeof p.name === "string" && now - p.at > ms);
+}
+export function withoutLaunch(pending, name) {
+  return (Array.isArray(pending) ? pending : []).filter((p) => p?.name !== name);
 }
 
 // The address `hc run --json` printed, or null.

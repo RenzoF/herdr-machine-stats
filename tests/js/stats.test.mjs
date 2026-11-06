@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 
 import {
-  COLLECT_SCRIPT, BTOP_SCRIPT, HISTORY, btopArgs, runAddress, hcErrorText,
+  COLLECT_SCRIPT, BTOP_SCRIPT, HISTORY, btopName, btopArgs, target,
+  abandoned, withoutLaunch, runAddress, hcErrorText,
   parseSnapshot, rejectReason, exitReason, readMachine, machineOfAddress,
   agentsByMachine, cardLevel, band, sizeText, pushHistory, columnsFor, step,
   ageText,
@@ -71,16 +72,62 @@ test("the scripts keep awk's \\n escapes", () => {
   assert.match(COLLECT_SCRIPT, /cpu_pct=%d\\n/);
 });
 
-test("btopArgs starts btop with no parent, removed on exit", () => {
-  const here = btopArgs(null);
-  assert.deepEqual(here.slice(0, 7),
-    ["run", "--bg", "--json", "--no-parent", "--rm", "--label",
-      "by=machine-stats"]);
+test("btopArgs starts a named btop with no parent, removed on exit", () => {
+  const here = btopArgs(null, "machine-stats-btop-abc123");
+  assert.deepEqual(here.slice(0, 9),
+    ["run", "--bg", "--json", "--no-parent", "--rm", "--name",
+      "machine-stats-btop-abc123", "--label", "by=machine-stats"]);
   assert.ok(!here.includes("--on"));
   assert.deepEqual(here.slice(-4), ["--", "sh", "-c", BTOP_SCRIPT]);
-  const there = btopArgs("agent-desk");
+  const there = btopArgs("agent-desk", "n");
   assert.equal(there[there.indexOf("--on") + 1], "agent-desk");
   assert.ok(there.indexOf("--on") < there.indexOf("--"));
+});
+
+test("btopName fits hc's name rules", () => {
+  for (const r of [() => 0.123456789, () => 0, Math.random]) {
+    const name = btopName(r);
+    assert.match(name, /^machine-stats-btop-[a-z0-9]{6}$/);
+    assert.ok(name.length <= 32);
+  }
+  assert.notEqual(btopName(), btopName());
+});
+
+test("target names a terminal here or there", () => {
+  assert.equal(target(null, "n"), "n");
+  assert.equal(target("agent-desk", "n"), "agent-desk/n");
+});
+
+test("pending launches: abandoned after a while, dropped by name", () => {
+  const now = 100000;
+  const pending = [
+    { machine: "agent-desk", name: "a", at: now - 90000 },
+    { machine: null, name: "b", at: now - 1000 },
+    null,
+    { machine: null, at: 0 },
+  ];
+  assert.deepEqual(abandoned(pending, now, 60000).map((p) => p.name), ["a"]);
+  assert.deepEqual(abandoned(undefined, now), []);
+  assert.deepEqual(abandoned("junk", now), []);
+  assert.deepEqual(withoutLaunch(pending, "a").map((p) => p?.name),
+    ["b", undefined, undefined]);
+  assert.deepEqual(withoutLaunch(undefined, "a"), []);
+});
+
+test("the btop script picks a UTF-8 locale macOS has", () => {
+  assert.match(BTOP_SCRIPT, /utf=C\.UTF-8; \[ "\$\(uname -s\)" = Darwin \] && utf=en_US\.UTF-8/);
+  assert.match(BTOP_SCRIPT, /export LANG=\$utf/);
+});
+
+test("the btop script keeps a UTF-8 locale and fixes a missing one", () => {
+  // Everything up to the exec, then print what btop would get.
+  const head = BTOP_SCRIPT.slice(0, BTOP_SCRIPT.indexOf("command -v"));
+  const run = (env) => execFileSync("sh", ["-c",
+    `${head}echo "$LANG|$LC_ALL"`], { encoding: "utf8",
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env } }).trim();
+  assert.equal(run({ LANG: "en_GB.UTF-8" }), "en_GB.UTF-8|");
+  assert.equal(run({ LANG: "C", LC_ALL: "POSIX" }), "C.UTF-8|");
+  assert.equal(run({}), "C.UTF-8|");
 });
 
 test("runAddress and hcErrorText read hc's JSON", () => {

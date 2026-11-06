@@ -194,7 +194,11 @@ clicking one goes to it.
 - **btop** opens in a dialog over the app, running on that machine
   through its core (`hc run --on`), not over SSH. q quits it, or ✕ closes
   the dialog; either way the btop terminal ends and is removed. A machine
-  without btop says so for three seconds.
+  without btop says so for three seconds. If the dashboard closes while
+  btop is still starting, that btop is ended too: at once when it already
+  exists, otherwise by the next dashboard's first read once a minute has
+  passed. Launches still waiting for their dialog are the only thing the
+  mod stores (the app's shared state `machine-stats.pending`).
 - **Borders and dots**: the selected card has the accent border; yellow is
   an alert (an agent needs you, or memory or disk above 90%); red is a
   machine that could not be read, with the reason (`unknown machine`,
