@@ -7,7 +7,8 @@ import { execFileSync } from "node:child_process";
 
 import {
   COLLECT_SCRIPT, BTOP_SCRIPT, HISTORY, btopName, btopArgs, target,
-  abandoned, withoutLaunch, runAddress, hcErrorText,
+  abandoned, withoutLaunch, isPending, forgetLaunch, ABANDON_MS, runAddress,
+  hcErrorText,
   parseSnapshot, rejectReason, exitReason, readMachine, machineOfAddress,
   agentsByMachine, cardLevel, band, sizeText, pushHistory, columnsFor, step,
   ageText,
@@ -112,6 +113,21 @@ test("pending launches: abandoned after a while, dropped by name", () => {
   assert.deepEqual(withoutLaunch(pending, "a").map((p) => p?.name),
     ["b", undefined, undefined]);
   assert.deepEqual(withoutLaunch(undefined, "a"), []);
+  assert.equal(isPending(pending, "b"), true);
+  assert.equal(isPending(pending, "zz"), false);
+  assert.equal(isPending(undefined, "b"), false);
+  // the default wait is longer than exec's 30 s limit
+  assert.ok(ABANDON_MS > 30000);
+  assert.deepEqual(abandoned(pending, now).map((p) => p.name), ["a"]);
+});
+
+test("forgetLaunch: only once hc says it is gone, or after a day", () => {
+  assert.equal(forgetLaunch(0, 70000), true); // killed
+  assert.equal(forgetLaunch(3, 70000), true); // not_found
+  assert.equal(forgetLaunch(4, 70000), true); // machine_unknown
+  assert.equal(forgetLaunch(1, 70000), false); // e.g. unreachable
+  assert.equal(forgetLaunch(-1, 70000), false); // hc did not run
+  assert.equal(forgetLaunch(1, 2 * 86400000), true);
 });
 
 test("the btop script picks a UTF-8 locale macOS has", () => {

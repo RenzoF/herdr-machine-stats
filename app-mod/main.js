@@ -14,7 +14,8 @@ import {
 } from "herdr";
 import {
   MOD, POLL_MS, STATUS_ORDER, readMachine, btopName, btopArgs, target,
-  runAddress, hcErrorText, PENDING_KEY, abandoned, withoutLaunch,
+  runAddress, hcErrorText, PENDING_KEY, abandoned, withoutLaunch, isPending,
+  forgetLaunch,
   machineKey, agentsByMachine, cardLevel, band, sizeText, pushHistory,
   columnsFor, step, ageText,
 } from "./stats.js";
@@ -40,9 +41,12 @@ export default class MachineStats extends View {
     this.btops = 0; // btop launches and dialogs from this copy, still open
     this.launching = new Map(); // name -> machine, while hc starts it
     this.handle = cx.focus_handle();
-    this.focusSelf();
-    // An overlay settles a moment after it opens; take the keyboard again.
-    cx.timer.after(600, () => this.focusSelf());
+    this.handle.focus();
+    // An overlay settles a moment after it opens; take the keyboard again,
+    // unless a btop of ours is already starting or over this copy.
+    cx.timer.after(600, () => {
+      if (!this.btops) this.handle.focus();
+    });
     this.poll(cx);
     cx.timer.every(POLL_MS, (cx) => this.poll(cx));
     cx.spawn(async (cx) => {
@@ -67,24 +71,28 @@ export default class MachineStats extends View {
       hc(["kill", target(machine, name)])));
   }
 
-  // The keyboard, unless a btop of ours is (about to be) over this copy.
-  focusSelf() {
-    if (!this.btops) this.handle.focus();
-  }
-
   // Ends launches that no dialog took over, then forgets them. close()
   // tries first, but a remote terminal may not exist yet when it runs,
   // and the app cancels the rest of the launch once the dashboard is gone.
   sweep(cx) {
-    const old = abandoned(shared(PENDING_KEY), Date.now(), 60000);
+    const old = abandoned(shared(PENDING_KEY), Date.now());
     if (!old.length || this.sweeping) return;
     this.sweeping = true;
     cx.spawn(async () => {
       try {
-        for (const p of old) await hc(["kill", target(p.machine, p.name)]);
-        let left = shared(PENDING_KEY);
-        for (const p of old) left = withoutLaunch(left, p.name);
-        setShared(PENDING_KEY, left);
+        for (const p of old) {
+          // Taken over since the list was read: a dialog shows it.
+          if (!isPending(shared(PENDING_KEY), p.name)) continue;
+          let code = -1;
+          try {
+            code = (await hc(["kill", target(p.machine, p.name)])).code;
+          } catch {
+            // hc did not run: try again next poll
+          }
+          if (forgetLaunch(code, Date.now() - p.at)) {
+            setShared(PENDING_KEY, withoutLaunch(shared(PENDING_KEY), p.name));
+          }
+        }
       } finally {
         this.sweeping = false;
       }
@@ -126,7 +134,7 @@ export default class MachineStats extends View {
   // the app hands this copy the keyboard (after the btop dialog closes).
   command(command, cx) {
     const [name, arg] = command.split(":");
-    if (name === "focus") this.focusSelf();
+    if (name === "focus") this.handle.focus();
     else if (name === "refresh") this.poll(cx);
     else if (name === "btop") {
       const all = this.list();
@@ -194,7 +202,7 @@ export default class MachineStats extends View {
       for (let i = 0; i < 20 && !live(); i++) await cx.sleep(250);
       while (live()) await cx.sleep(500);
       this.btops -= 1;
-      this.focusSelf();
+      this.handle.focus();
       cx.notify();
     });
   }

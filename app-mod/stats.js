@@ -89,12 +89,25 @@ export const target = (machine, name) => (machine ? `${machine}/${name}` : name)
 // [{machine, name, at}]. Ones older than `ms` were abandoned (the
 // dashboard closed while hc was still starting them) and get killed.
 export const PENDING_KEY = `${MOD}.pending`;
-export function abandoned(pending, now, ms = 30000) {
+// Twice exec's 30 s limit, so a launch hc is still starting never counts.
+export const ABANDON_MS = 60000;
+export function abandoned(pending, now, ms = ABANDON_MS) {
   return (Array.isArray(pending) ? pending : [])
     .filter((p) => p && typeof p.name === "string" && now - p.at > ms);
 }
 export function withoutLaunch(pending, name) {
   return (Array.isArray(pending) ? pending : []).filter((p) => p?.name !== name);
+}
+export function isPending(pending, name) {
+  return (Array.isArray(pending) ? pending : []).some((p) => p?.name === name);
+}
+
+// After `hc kill` on an abandoned launch: forget it once hc says it is
+// gone (killed, no such terminal, no such machine) or it is a day old;
+// anything else (the machine unreachable) is tried again next poll.
+const GONE = new Set([0, 3, 4]);
+export function forgetLaunch(code, ageMs) {
+  return GONE.has(code) || ageMs > 86400000;
 }
 
 // The address `hc run --json` printed, or null.
